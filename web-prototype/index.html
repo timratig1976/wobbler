@@ -1,0 +1,1086 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wobbler Synthesizer</title>
+<style>
+:root {
+  --bg:       #0d0d10;
+  --panel:    #16161c;
+  --panel2:   #1e1e26;
+  --border:   rgba(255,255,255,0.07);
+  --txt:      #ccc;
+  --txt2:     #666;
+  --a-osc:    #4a80ff;
+  --b-osc:    #38b870;
+  --c-filter: #e05828;
+  --c-amp:    #22b8a0;
+  --c-fenv:   #e09020;
+  --c-lfo:    #a060e0;
+  --c-master: #8888aa;
+}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg);
+  color: var(--txt);
+  min-height: 100vh;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* ── Header ── */
+.hdr {
+  width: 100%;
+  max-width: 1160px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px 10px;
+}
+.logo {
+  font-size: 1.5em;
+  font-weight: 900;
+  letter-spacing: 3px;
+  background: linear-gradient(135deg,#4a80ff,#a060e0);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.logo-sub { font-size: 0.65em; color: var(--txt2); letter-spacing: 1px; font-weight: 400; display: block; }
+.hdr-right { display: flex; gap: 8px; align-items: center; }
+.ai-btn {
+  background: linear-gradient(135deg,#4a80ff,#a060e0);
+  color:#fff; border:none; padding:7px 18px; border-radius:20px;
+  font-size:0.8em; font-weight:700; cursor:pointer; letter-spacing:0.5px;
+  transition: opacity 0.2s;
+}
+.ai-btn:hover { opacity:0.85; }
+
+/* ── Synth body ── */
+.synth { width:100%; max-width:1160px; display:flex; flex-direction:column; gap:8px; }
+
+/* ── Panel base ── */
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px 12px;
+  position: relative;
+}
+.panel-hdr {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  font-size: 0.7em;
+  font-weight: 800;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--accent, #888);
+}
+.panel-hdr::before {
+  content: '';
+  display: inline-block;
+  width: 3px; height: 12px;
+  background: var(--accent, #888);
+  border-radius: 2px;
+}
+
+/* ── Workflow row layouts ── */
+.row-sound  { display: grid; grid-template-columns: 1fr 1fr 1fr;         gap: 8px; }
+.row-filter { display: grid; grid-template-columns: 1fr;                 gap: 8px; }
+.row2       { display: grid; grid-template-columns: 1fr 1fr;              gap: 8px; }
+.row-mod    { display: grid; grid-template-columns: 1fr 1fr 1fr;          gap: 8px; }
+
+/* ── LFO curve canvas ── */
+.lfo-curve-wrap {
+  margin: 6px 0 4px; border-radius: 5px; overflow: hidden;
+  border: 1px solid var(--border); cursor: crosshair;
+}
+.lfo-curve { display: block; width: 100%; height: 64px; touch-action: none; }
+.lfo-mult-row {
+  display: flex; align-items: center; gap: 3px; margin: 5px 0 3px;
+}
+.lfo-mult-lbl {
+  font-size: 0.54em; font-weight: 800; letter-spacing: 0.5px;
+  color: rgba(255,255,255,0.2); text-transform: uppercase; margin-right: 2px;
+  white-space: nowrap;
+}
+.lfo-mult-btn {
+  flex: 1; background: var(--panel2); border: 1px solid var(--border);
+  border-radius: 4px; padding: 3px 2px; cursor: pointer;
+  font-size: 0.65em; font-weight: 800; letter-spacing: 0.2px;
+  color: var(--txt2); text-align: center; transition: all 0.12s; font-family: monospace;
+}
+.lfo-mult-btn.active, .lfo-mult-btn:hover {
+  background: rgba(var(--accent-rgb,160,96,224),0.2);
+  border-color: var(--accent,#a060e0); color: var(--accent,#a060e0);
+}
+.lfo-preset-row {
+  display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; margin: 4px 0 8px;
+}
+.lfo-preset-btn {
+  flex: 1; background: var(--panel2); border: 1px solid var(--border);
+  border-radius: 4px; padding: 3px 2px; cursor: pointer;
+  font-size: 0.58em; font-weight: 800; letter-spacing: 0.3px;
+  color: var(--txt2); text-align: center; transition: all 0.12s;
+}
+.lfo-preset-btn:hover {
+  background: rgba(var(--accent-rgb,160,96,224),0.15);
+  border-color: var(--accent,#a060e0); color: var(--accent,#a060e0);
+}
+.lfo-preset-btn:active { transform: scale(0.95); }
+
+/* ── LFO routing chip in header ── */
+.lfo-active-chip {
+  font-size: 0.58em; font-weight: 800; letter-spacing: 0.3px;
+  color: var(--accent); background: rgba(var(--accent-rgb),0.15);
+  border: 1px solid rgba(var(--accent-rgb),0.35);
+  border-radius: 3px; padding: 1px 6px; margin-left: 5px;
+  vertical-align: middle;
+}
+/* ── LFO target description ── */
+.lfo-target-desc {
+  font-size: 0.58em; color: rgba(255,255,255,0.22); font-style: italic;
+  margin: -2px 0 6px; min-height: 1.2em; line-height: 1.4;
+}
+/* ── LFO target selector ── */
+.lfo-target-sel {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 3px; margin: 5px 0 4px;
+}
+.lfo-target-btn {
+  background: var(--panel2); border: 1px solid var(--border);
+  border-radius: 4px; padding: 4px 2px; cursor: pointer;
+  font-size: 0.57em; font-weight: 800; letter-spacing: 0.3px;
+  color: var(--txt2); text-align: center; transition: all 0.15s; white-space: nowrap;
+}
+.lfo-target-btn.active, .lfo-target-btn:hover {
+  background: rgba(var(--accent-rgb,160,96,224),0.15);
+  border-color: var(--accent,#a060e0); color: var(--accent,#a060e0);
+}
+.row-ai     { display: grid; grid-template-columns: repeat(4, 1fr);       gap: 8px; }
+
+/* ── Waveform selector ── */
+.wave-sel { display: flex; gap: 4px; margin-bottom: 10px; }
+.wave-btn {
+  flex: 1;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 5px 2px;
+  cursor: pointer;
+  color: var(--txt2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+.wave-btn:hover  { border-color: var(--accent,#888); color: var(--accent,#888); }
+.wave-btn.active { background: rgba(var(--accent-rgb,100,120,200),0.18); border-color: var(--accent,#888); color: var(--accent,#888); }
+.wave-btn svg    { width:28px; height:16px; }
+
+/* ── Curve / small toggle buttons ── */
+.curve-btns { display: flex; gap: 3px; margin-left: auto; }
+.curve-btn {
+  background: var(--panel2); border: 1px solid var(--border);
+  border-radius: 4px; padding: 2px 7px; cursor: pointer;
+  color: var(--txt2); font-size: 0.65em; font-weight: 800; letter-spacing: 0.5px;
+  transition: all 0.15s;
+}
+.curve-btn:hover  { border-color: var(--accent,#888); color: var(--accent,#888); }
+.curve-btn.active { background: rgba(var(--accent-rgb,100,120,200),0.18); border-color: var(--accent,#888); color: var(--accent,#888); }
+
+/* ── Filter type selector ── */
+.ftype-sel { display: flex; gap: 4px; margin-bottom: 10px; flex-wrap: wrap; }
+.ftype-btn {
+  flex: 1;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 4px 2px;
+  cursor: pointer;
+  color: var(--txt2);
+  font-size: 0.7em;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-align: center;
+  min-width: 32px;
+  transition: all 0.15s;
+}
+.ftype-btn:hover  { border-color: var(--c-filter); color: var(--c-filter); }
+.ftype-btn.active { background: rgba(224,88,40,0.15); border-color: var(--c-filter); color: var(--c-filter); }
+
+/* ── Parameter slots ── */
+.params     { display: flex; gap: 6px; flex-wrap: wrap; }
+.p-slot     { display: flex; flex-direction: column; align-items: center; gap: 2px; flex: 1; min-width: 44px; }
+.p-lbl      { font-size: 8.5px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--txt2); white-space: nowrap; }
+.p-val      { font-size: 9.5px; font-weight: 700; color: #fff; white-space: nowrap; }
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 3px;
+  background: rgba(255,255,255,0.1);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: var(--accent, #888);
+  cursor: pointer;
+  box-shadow: 0 0 4px rgba(0,0,0,0.5);
+}
+input[type="range"]::-moz-range-thumb {
+  width:12px; height:12px;
+  border-radius:50%;
+  background: var(--accent,#888);
+  border:none; cursor:pointer;
+}
+
+/* ── Env visualizer (old small SVG, still used by PITCH ENV) ── */
+.env-viz-wrap {
+  width: 100%;
+  height: 36px;
+  margin-bottom: 8px;
+  background: rgba(0,0,0,0.3);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.env-viz-wrap svg { width:100%; height:100%; }
+
+/* ── Canvas envelope editor ── */
+.env-canvas-wrap {
+  width: 100%;
+  margin-bottom: 10px;
+  border-radius: 5px;
+  overflow: hidden;
+  cursor: default;
+  position: relative;
+}
+.env-canvas {
+  display: block;
+  width: 100%;
+  height: 130px;
+  border-radius: 5px;
+}
+.env-canvas-hint {
+  position: absolute;
+  bottom: 3px; right: 6px;
+  font-size: 8px; color: rgba(255,255,255,0.2);
+  pointer-events: none; letter-spacing: 0.5px;
+}
+
+/* ── Amount slider (can be negative) ── */
+.p-slot.bipolar .p-val { color: #e09020; }
+
+/* ── Master volume (header) ── */
+.hdr-vol {
+  display: flex; align-items: center; gap: 7px;
+  padding: 0 12px 0 0;
+  border-right: 1px solid rgba(255,255,255,0.08);
+  margin-right: 4px;
+}
+.hdr-vol-lbl {
+  font-size: 0.62em; font-weight: 800; letter-spacing: 0.5px;
+  color: rgba(255,255,255,0.3); text-transform: uppercase; white-space: nowrap;
+}
+#volume {
+  -webkit-appearance: none; appearance: none;
+  width: 80px; height: 3px; border-radius: 2px; outline: none; cursor: pointer;
+  background: linear-gradient(to right, #8888aa calc(var(--pct,65) * 1%), rgba(255,255,255,0.1) calc(var(--pct,65) * 1%));
+}
+#volume::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 11px; height: 11px;
+  border-radius: 50%; background: #aaaacc; cursor: pointer;
+}
+.hdr-vol-val {
+  font-size: 0.62em; font-weight: 700; color: rgba(255,255,255,0.35);
+  min-width: 28px; text-align: right;
+}
+
+/* ── Keyboard section ── */
+.kb-section {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px 14px;
+}
+.kb-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  font-size: 0.75em;
+  color: var(--txt2);
+}
+.kb-hdr strong { color: var(--a-osc); }
+.oct-btn {
+  background: rgba(74,128,255,0.15);
+  color: var(--a-osc);
+  border: 1px solid rgba(74,128,255,0.3);
+  padding: 4px 12px;
+  border-radius: 14px;
+  font-size: 0.75em;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.oct-btn:hover { background: rgba(74,128,255,0.3); }
+
+.kb-wrap {
+  overflow-x: auto;
+  overflow-y: visible;
+  padding-bottom: 26px;
+}
+.kb-wrap::-webkit-scrollbar { height: 4px; }
+.kb-wrap::-webkit-scrollbar-thumb { background: rgba(74,128,255,0.3); border-radius: 2px; }
+
+.piano { position:relative; display:inline-block; height:148px; user-select:none; }
+
+.wkey {
+  display: inline-block;
+  width: 34px; height: 148px;
+  background: linear-gradient(180deg,#f0f0f0,#d8d8d8);
+  border: 1px solid #555;
+  border-radius: 0 0 5px 5px;
+  position: relative;
+  cursor: pointer;
+  vertical-align: top;
+  box-shadow: 1px 3px 5px rgba(0,0,0,0.5), inset 0 -2px 4px rgba(0,0,0,0.08);
+  transition: background 0.04s;
+}
+.wkey:hover { background: linear-gradient(180deg,#dde8ff,#c0ccee); }
+.wkey.active {
+  background: linear-gradient(180deg,#4a80ff,#a060e0);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+  transform: translateY(2px);
+}
+.wkey .klabel {
+  position:absolute; bottom:4px; left:50%; transform:translateX(-50%);
+  font-size:7.5px; color:#aaa; font-weight:700; pointer-events:none; white-space:nowrap;
+}
+.wkey.active .klabel { color:rgba(255,255,255,0.8); }
+.wkey .kbind {
+  position:absolute; bottom:16px; left:50%; transform:translateX(-50%);
+  font-size:8px; color:#bbb; font-weight:700;
+  background:rgba(0,0,0,0.12); border-radius:2px; padding:1px 3px;
+  pointer-events:none;
+}
+.wkey.active .kbind { color:rgba(255,255,255,0.65); }
+
+.bkey {
+  width:20px; height:92px;
+  background: linear-gradient(180deg,#383838,#111);
+  border:1px solid #000; border-top:1px solid #555;
+  border-radius:0 0 4px 4px;
+  position:absolute; top:0; z-index:2; cursor:pointer;
+  box-shadow: 1px 4px 8px rgba(0,0,0,0.9), inset 0 -2px 4px rgba(0,0,0,0.5);
+  transition: background 0.04s;
+}
+.bkey:hover { background: linear-gradient(180deg,#4a5,#212); }
+.bkey.active {
+  background: linear-gradient(180deg,#4a80ff,#a060e0);
+  box-shadow:0 2px 4px rgba(0,0,0,0.9);
+  transform:translateY(2px);
+}
+.bkey .klabel {
+  position:absolute; bottom:3px; left:50%; transform:translateX(-50%);
+  font-size:7px; color:#777; font-weight:700; pointer-events:none; white-space:nowrap;
+}
+.bkey.active .klabel { color:rgba(255,255,255,0.75); }
+.bkey .kbind {
+  position:absolute; bottom:16px; left:50%; transform:translateX(-50%);
+  font-size:7px; color:#999; font-weight:700;
+  background:rgba(0,0,0,0.3); border-radius:2px; padding:1px 2px;
+  pointer-events:none;
+}
+.bkey.active .kbind { color:rgba(255,255,255,0.65); }
+
+.oct-sep {
+  position:absolute; top:0; width:2px; height:148px;
+  background:rgba(74,128,255,0.2); z-index:3; pointer-events:none;
+}
+.oct-lbl-row { position:relative; height:18px; }
+.oct-lbl { position:absolute; font-size:8px; color:#444; font-weight:700; letter-spacing:0.5px; }
+
+/* ── Panel enable/disable toggle ── */
+.panel-hdr { display: flex; align-items: center; gap: 6px; }
+.panel-toggle {
+  margin-left: auto; flex-shrink: 0;
+  background: none; border: 1px solid rgba(255,255,255,0.15); border-radius: 4px;
+  width: 24px; height: 16px; cursor: pointer; font-size: 10px;
+  color: rgba(255,255,255,0.25); display: inline-flex; align-items: center;
+  justify-content: center; padding: 0; transition: all 0.15s;
+}
+.panel-toggle.active {
+  color: var(--accent,#888); border-color: var(--accent,#888);
+  background: rgba(var(--accent-rgb,128,128,128),0.15);
+}
+.panel-disabled { opacity: 0.4; pointer-events: none; }
+.panel-disabled .panel-toggle { pointer-events: auto; opacity: 1; }
+
+/* ── Envelope mode row ── */
+.env-mode-row { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; }
+.env-mode-btns { display: flex; gap: 3px; }
+.env-mode-btn {
+  background: var(--panel2); border: 1px solid var(--border); border-radius: 4px;
+  padding: 3px 8px; color: var(--txt2); font-size: 0.63em; font-weight: 800;
+  letter-spacing: 0.5px; cursor: pointer; transition: all 0.15s; text-transform: uppercase;
+}
+.env-mode-btn.active {
+  background: rgba(var(--accent-rgb,128,128,128),0.15);
+  border-color: var(--accent,#888); color: var(--accent,#888);
+}
+.env-auto-btn {
+  margin-left: auto;
+  background: rgba(var(--accent-rgb,128,128,128),0.08);
+  border: 1px solid rgba(var(--accent-rgb,128,128,128),0.3); border-radius: 4px;
+  padding: 3px 9px; color: var(--accent,#888); font-size: 0.63em; font-weight: 800;
+  cursor: pointer; white-space: nowrap; transition: all 0.15s;
+}
+.env-auto-btn:hover { background: rgba(var(--accent-rgb,128,128,128),0.2); }
+
+/* ── Noise type selector ── */
+.noise-type-sel { display: flex; gap: 4px; margin-bottom: 10px; }
+.noise-btn {
+  flex: 1; background: var(--panel2); border: 1px solid var(--border);
+  border-radius: 5px; padding: 5px 2px; cursor: pointer;
+  font-size: 0.62em; font-weight: 800; letter-spacing: 0.5px;
+  color: var(--txt2); text-align: center; transition: all 0.15s;
+}
+.noise-btn.active, .noise-btn:hover {
+  background: rgba(var(--accent-rgb,144,96,240),0.15);
+  border-color: var(--accent,#9060f0); color: var(--accent,#9060f0);
+}
+
+/* ── Section headers ── */
+.section-hdr {
+  display: flex; align-items: center; gap: 10px;
+  margin: 12px 0 5px; padding: 0 2px;
+  font-size: 0.62em; font-weight: 900; letter-spacing: 2.5px;
+  text-transform: uppercase; color: rgba(255,255,255,0.18);
+}
+.section-hdr::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+.section-step {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--panel2); border: 1px solid var(--border);
+  border-radius: 50%; width: 18px; height: 18px; font-size: 0.95em;
+  flex-shrink: 0; color: rgba(255,255,255,0.3);
+}
+.section-hdr.ai-hdr { color: rgba(255,190,30,0.55); }
+.section-hdr.ai-hdr .section-step {
+  color: rgba(255,190,30,0.75); border-color: rgba(255,190,30,0.3);
+  background: rgba(255,190,30,0.06);
+}
+
+/* ── AI tool cards ── */
+.ai-card {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 14px 14px 12px;
+  display: flex; flex-direction: column; gap: 9px;
+  transition: border-color 0.2s;
+}
+.ai-card:hover { border-color: rgba(255,190,30,0.22); }
+.ai-card-title {
+  font-size: 0.67em; font-weight: 900; letter-spacing: 1.5px;
+  color: rgba(255,190,30,0.85); text-transform: uppercase;
+}
+.ai-card-desc { font-size: 0.72em; color: var(--txt2); line-height: 1.55; flex: 1; }
+.ai-card-tag {
+  display: inline-block; background: rgba(255,190,30,0.08);
+  border: 1px solid rgba(255,190,30,0.2); border-radius: 3px;
+  padding: 2px 6px; font-size: 0.65em; font-weight: 700;
+  color: rgba(255,190,30,0.6); letter-spacing: 0.5px;
+}
+.ai-card-btn {
+  background: rgba(255,190,30,0.08); border: 1px solid rgba(255,190,30,0.25);
+  border-radius: 5px; padding: 7px 12px; color: rgba(255,190,30,0.9);
+  font-size: 0.72em; font-weight: 800; letter-spacing: 0.5px;
+  cursor: pointer; transition: all 0.15s; text-align: center;
+  margin-top: auto;
+}
+.ai-card-btn:hover { background: rgba(255,190,30,0.18); border-color: rgba(255,190,30,0.5); }
+.ai-card-btn:active { transform: scale(0.97); }
+
+/* ── LFO target row ── */
+.lfo-target-row {
+  display: flex; align-items: center; gap: 6px;
+  margin: 4px 0 8px; padding: 5px 8px;
+  background: rgba(160,96,224,0.07); border: 1px solid rgba(160,96,224,0.18);
+  border-radius: 5px;
+}
+.lfo-target-lbl {
+  font-size: 0.6em; font-weight: 700; color: rgba(255,255,255,0.25);
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.lfo-target-chip {
+  font-size: 0.65em; font-weight: 800; letter-spacing: 0.5px;
+  color: var(--c-lfo, #a060e0);
+  background: rgba(160,96,224,0.12); border: 1px solid rgba(160,96,224,0.3);
+  border-radius: 4px; padding: 2px 7px;
+}
+.lfo-target-desc {
+  font-size: 0.6em; font-weight: 600; color: rgba(255,255,255,0.2);
+  margin-left: auto;
+}
+
+/* ── Filter frequency response visualizer ── */
+.filter-viz-wrap {
+  margin: 7px 0 8px; border-radius: 6px; overflow: hidden;
+  border: 1px solid var(--border);
+}
+.filter-viz { display: block; width: 100%; height: 88px; cursor: crosshair; }
+
+/* ── Pitch bend wheel ── */
+.kb-with-wheels { display: flex; gap: 10px; align-items: flex-end; }
+.kb-wrap { flex: 1; overflow-x: auto; }
+.pb-area {
+  display: flex; flex-direction: column; align-items: center; gap: 5px;
+  flex-shrink: 0; padding-bottom: 2px;
+}
+.pb-wheel {
+  width: 36px; height: 120px;
+  background: linear-gradient(to bottom, #0a0a12, #111118);
+  border: 1px solid var(--border); border-radius: 8px;
+  position: relative; cursor: ns-resize;
+  user-select: none; touch-action: none; overflow: hidden;
+}
+.pb-wheel:hover { border-color: rgba(74,128,255,0.35); }
+.pb-center-mark {
+  position: absolute; left: 0; right: 0; top: 50%; height: 1px;
+  background: rgba(255,255,255,0.1);
+}
+.pb-track {
+  position: absolute; left: 50%; top: 10px; bottom: 10px;
+  width: 2px; margin-left: -1px;
+  background: rgba(255,255,255,0.05); border-radius: 1px;
+}
+.pb-thumb {
+  position: absolute; left: 5px; right: 5px; height: 22px;
+  background: rgba(74,128,255,0.55); border-radius: 4px;
+  top: calc(50% - 11px);
+  box-shadow: 0 0 8px rgba(74,128,255,0.3);
+  transition: background 0.1s;
+}
+.pb-wheel:active .pb-thumb { background: var(--a-osc, #4a80ff); }
+.pb-label {
+  font-size: 0.57em; font-weight: 800; color: rgba(255,255,255,0.22);
+  letter-spacing: 1px; text-align: center; line-height: 1.3;
+  text-transform: uppercase;
+}
+.pb-val {
+  font-size: 0.62em; font-weight: 700; color: rgba(74,128,255,0.7);
+  text-align: center; font-variant-numeric: tabular-nums; min-width: 36px;
+}
+.pb-range-btns { display: flex; gap: 2px; }
+.pb-range-btn {
+  background: var(--panel2); border: 1px solid var(--border); border-radius: 3px;
+  padding: 2px 5px; color: var(--txt2); font-size: 0.55em; font-weight: 700;
+  cursor: pointer; white-space: nowrap; transition: all 0.1s;
+}
+.pb-range-btn.active {
+  background: rgba(74,128,255,0.15);
+  border-color: var(--a-osc, #4a80ff); color: var(--a-osc, #4a80ff);
+}
+
+/* ── Preset bar ── */
+.preset-bar {
+  width: 100%;
+  max-width: 1160px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.preset-label {
+  font-size: 0.65em; font-weight: 800; letter-spacing: 2px;
+  text-transform: uppercase; color: var(--txt2); white-space: nowrap;
+}
+.preset-divider { width:1px; height:20px; background:var(--border); flex-shrink:0; }
+#preset-name {
+  background: var(--panel2); border: 1px solid var(--border);
+  border-radius: 5px; padding: 5px 10px;
+  color: var(--txt); font-size: 0.78em; width: 150px; outline: none;
+  transition: border-color 0.15s;
+}
+#preset-name:focus { border-color: rgba(74,128,255,0.5); }
+#preset-name::placeholder { color: var(--txt2); }
+#preset-select {
+  flex: 1; background: var(--panel2); border: 1px solid var(--border);
+  border-radius: 5px; padding: 5px 10px;
+  color: var(--txt); font-size: 0.78em; outline: none; cursor: pointer;
+}
+.preset-btn {
+  background: var(--panel2); border: 1px solid var(--border);
+  border-radius: 5px; padding: 5px 14px;
+  color: var(--txt2); font-size: 0.75em; font-weight: 700;
+  cursor: pointer; white-space: nowrap; transition: all 0.15s;
+}
+.preset-btn:hover { border-color: rgba(74,128,255,0.4); color: var(--a-osc); }
+.preset-btn.save { background: rgba(74,128,255,0.1); border-color: rgba(74,128,255,0.3); color: var(--a-osc); }
+.preset-btn.save:hover { background: rgba(74,128,255,0.22); }
+.preset-btn.del:hover { border-color: rgba(255,80,80,0.5); color: #ff7070; }
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 4px; height:4px; }
+::-webkit-scrollbar-track { background: rgba(255,255,255,0.03); }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius:2px; }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="hdr">
+  <div>
+    <span class="logo">WOBBLER<span class="logo-sub">AI-Driven Wobble Bass Synthesizer</span></span>
+  </div>
+  <div class="hdr-right">
+    <div class="hdr-vol">
+      <span class="hdr-vol-lbl">VOL</span>
+      <input type="range" id="volume" min="0" max="100" value="65" step="1">
+      <span class="hdr-vol-val" id="volume-v">65%</span>
+    </div>
+    <button class="ai-btn" id="gen-ai">✦ AI Wobble Pattern</button>
+  </div>
+</div>
+
+<!-- Preset bar -->
+<div class="preset-bar">
+  <span class="preset-label">Presets</span>
+  <input type="text" id="preset-name" placeholder="name your patch…" />
+  <button class="preset-btn save" id="preset-save-btn">💾 Save</button>
+  <div class="preset-divider"></div>
+  <select id="preset-select"><option value="">— select preset —</option></select>
+  <button class="preset-btn" id="preset-load-btn">Load</button>
+  <button class="preset-btn del" id="preset-del-btn">✕</button>
+</div>
+
+<div class="synth">
+
+  <!-- ① SOUND SOURCE -->
+  <div class="section-hdr"><span class="section-step">1</span> Sound Source</div>
+  <div class="row-sound">
+
+    <!-- OSC A -->
+    <div class="panel" style="--accent:var(--a-osc); --accent-rgb:74,128,255">
+      <div class="panel-hdr">OSC A <button class="panel-toggle active" id="oscA-toggle" data-param="oscAEnabled" title="Enable OSC A">⏻</button></div>
+      <div class="wave-sel" id="oscAWave-sel" data-param="oscAWave"></div>
+      <div class="params">
+        <div class="p-slot">
+          <div class="p-lbl">OCT</div>
+          <input type="range" id="oscAOctave" min="-2" max="2" value="0" step="1">
+          <div class="p-val" id="oscAOctave-v">0</div>
+        </div>
+        <div class="p-slot">
+          <div class="p-lbl">SEM</div>
+          <input type="range" id="oscADetune" min="-12" max="12" value="0" step="1">
+          <div class="p-val" id="oscADetune-v">0</div>
+        </div>
+        <div class="p-slot">
+          <div class="p-lbl">LEVEL</div>
+          <input type="range" id="oscALevel" min="0" max="100" value="100" step="1">
+          <div class="p-val" id="oscALevel-v">100%</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- OSC B -->
+    <div class="panel" style="--accent:var(--b-osc); --accent-rgb:56,184,112">
+      <div class="panel-hdr">OSC B <button class="panel-toggle active" id="oscB-toggle" data-param="oscBEnabled" title="Enable OSC B">⏻</button></div>
+      <div class="wave-sel" id="oscBWave-sel" data-param="oscBWave"></div>
+      <div class="params">
+        <div class="p-slot">
+          <div class="p-lbl">OCT</div>
+          <input type="range" id="oscBOctave" min="-2" max="2" value="-1" step="1">
+          <div class="p-val" id="oscBOctave-v">-1</div>
+        </div>
+        <div class="p-slot">
+          <div class="p-lbl">SEM</div>
+          <input type="range" id="oscBDetune" min="-12" max="12" value="0" step="1">
+          <div class="p-val" id="oscBDetune-v">0</div>
+        </div>
+        <div class="p-slot">
+          <div class="p-lbl">MIX</div>
+          <input type="range" id="oscBLevel" min="0" max="100" value="50" step="1">
+          <div class="p-val" id="oscBLevel-v">50%</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- NOISE -->
+    <div class="panel" style="--accent:#9060f0; --accent-rgb:144,96,240">
+      <div class="panel-hdr">NOISE <button class="panel-toggle" id="noise-toggle" data-param="noiseEnabled" title="Enable Noise">⏻</button></div>
+      <div class="noise-type-sel">
+        <button class="noise-btn active" data-type="white">WHITE</button>
+        <button class="noise-btn" data-type="pink">PINK</button>
+        <button class="noise-btn" data-type="brown">BROWN</button>
+        <button class="noise-btn" data-type="crackle">CRKL</button>
+      </div>
+      <div class="params">
+        <div class="p-slot">
+          <div class="p-lbl">LEVEL</div>
+          <input type="range" id="noiseLevel" min="0" max="100" value="0" step="1">
+          <div class="p-val" id="noiseLevel-v">0%</div>
+        </div>
+      </div>
+      <div style="margin-top:6px;font-size:0.68em;color:#444;line-height:1.7">
+        <span style="color:#6030a0">WHITE</span> full spectrum &nbsp;·&nbsp;
+        <span style="color:#6030a0">PINK</span> warm 1/f<br>
+        <span style="color:#6030a0">BROWN</span> low rumble &nbsp;·&nbsp;
+        <span style="color:#6030a0">CRKL</span> vinyl
+      </div>
+    </div>
+
+  </div><!-- /row-sound -->
+
+  <!-- ② SHAPE & FILTER -->
+  <div class="section-hdr"><span class="section-step">2</span> Shape &amp; Filter</div>
+  <div class="row-filter">
+
+    <!-- FILTER -->
+    <div class="panel" style="--accent:var(--c-filter); --accent-rgb:255,120,60">
+      <div class="panel-hdr">FILTER <button class="panel-toggle active" id="filter-toggle" data-param="filterEnabled" title="Enable Filter">⏻</button></div>
+      <div class="ftype-sel" id="filterType-sel"></div>
+      <div class="filter-viz-wrap">
+        <canvas id="filter-viz" class="filter-viz"></canvas>
+      </div>
+      <div class="params">
+        <div class="p-slot">
+          <div class="p-lbl">CUTOFF</div>
+          <input type="range" id="cutoff" min="20" max="18000" value="800" step="10">
+          <div class="p-val" id="cutoff-v">800 Hz</div>
+        </div>
+        <div class="p-slot">
+          <div class="p-lbl">RES</div>
+          <input type="range" id="resonance" min="0" max="28" value="5" step="0.5">
+          <div class="p-val" id="resonance-v">5.0</div>
+        </div>
+        <div class="p-slot">
+          <div class="p-lbl">DRIVE</div>
+          <input type="range" id="drive" min="0" max="100" value="20" step="1">
+          <div class="p-val" id="drive-v">20%</div>
+        </div>
+      </div>
+    </div>
+
+
+  </div><!-- /row-filter -->
+
+  <!-- Envelopes (still part of ② SHAPE) -->
+  <div class="row2">
+
+    <!-- AMP ENVELOPE -->
+    <div class="panel" style="--accent:var(--c-amp); --accent-rgb:34,184,160">
+      <div class="panel-hdr">AMP ENV
+        <span style="font-size:0.6em;font-weight:400;color:#555;margin-left:4px">drag nodes · ◉ bend curves</span>
+      </div>
+      <div class="env-mode-row">
+        <div class="env-mode-btns">
+          <button class="env-mode-btn active" data-canvas="amp" data-mode="smooth">SMOOTH</button>
+          <button class="env-mode-btn" data-canvas="amp" data-mode="steps">STEPS</button>
+          <button class="env-mode-btn" data-canvas="amp" data-mode="bounce">BOUNCE</button>
+        </div>
+        <button class="env-auto-btn" data-canvas="amp">⚡ AUTO</button>
+      </div>
+      <div class="env-canvas-wrap">
+        <canvas class="env-canvas" id="amp-env-canvas"></canvas>
+        <span class="env-canvas-hint">A · D · S · R</span>
+      </div>
+      <div class="params">
+        <div class="p-slot">
+          <div class="p-lbl">ATK</div>
+          <input type="range" id="ampAttack" min="1" max="2000" value="5" step="1">
+          <div class="p-val" id="ampAttack-v">5 ms</div>
+        </div>
+        <div class="p-slot">
+          <div class="p-lbl">DEC</div>
+          <input type="range" id="ampDecay" min="5" max="3000" value="100" step="5">
+          <div class="p-val" id="ampDecay-v">100 ms</div>
+        </div>
+        <div class="p-slot">
+          <div class="p-lbl">SUS</div>
+          <input type="range" id="ampSustain" min="0" max="100" value="70" step="1">
+          <div class="p-val" id="ampSustain-v">70%</div>
+        </div>
+        <div class="p-slot">
+          <div class="p-lbl">REL</div>
+          <input type="range" id="ampRelease" min="10" max="4000" value="250" step="10">
+          <div class="p-val" id="ampRelease-v">250 ms</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- FILTER ENVELOPE -->
+    <div class="panel" style="--accent:var(--c-fenv); --accent-rgb:224,144,32">
+      <div class="panel-hdr">FILTER ENV
+        <span style="font-size:0.6em;font-weight:400;color:#555;margin-left:4px">main wobble source</span>
+      </div>
+      <div class="env-mode-row">
+        <div class="env-mode-btns">
+          <button class="env-mode-btn active" data-canvas="fenv" data-mode="smooth">SMOOTH</button>
+          <button class="env-mode-btn" data-canvas="fenv" data-mode="steps">STEPS</button>
+          <button class="env-mode-btn" data-canvas="fenv" data-mode="bounce">BOUNCE</button>
+        </div>
+        <button class="env-auto-btn" data-canvas="fenv">⚡ AUTO</button>
+      </div>
+      <div class="env-canvas-wrap">
+        <canvas class="env-canvas" id="fenv-canvas"></canvas>
+        <span class="env-canvas-hint">A · D · S · R</span>
+      </div>
+      <div class="params">
+        <div class="p-slot">
+          <div class="p-lbl">ATK</div>
+          <input type="range" id="fEnvAttack" min="1" max="2000" value="5" step="1">
+          <div class="p-val" id="fEnvAttack-v">5 ms</div>
+        </div>
+        <div class="p-slot">
+          <div class="p-lbl">DEC</div>
+          <input type="range" id="fEnvDecay" min="5" max="3000" value="300" step="5">
+          <div class="p-val" id="fEnvDecay-v">300 ms</div>
+        </div>
+        <div class="p-slot">
+          <div class="p-lbl">SUS</div>
+          <input type="range" id="fEnvSustain" min="0" max="100" value="10" step="1">
+          <div class="p-val" id="fEnvSustain-v">10%</div>
+        </div>
+        <div class="p-slot">
+          <div class="p-lbl">REL</div>
+          <input type="range" id="fEnvRelease" min="10" max="4000" value="200" step="10">
+          <div class="p-val" id="fEnvRelease-v">200 ms</div>
+        </div>
+        <div class="p-slot bipolar">
+          <div class="p-lbl">AMOUNT</div>
+          <input type="range" id="fEnvAmount" min="-10000" max="10000" value="3000" step="50">
+          <div class="p-val" id="fEnvAmount-v">+3000 Hz</div>
+        </div>
+        <div class="p-slot">
+          <div class="p-lbl">VAR</div>
+          <input type="range" id="fEnvVariation" min="0" max="100" value="0" step="1">
+          <div class="p-val" id="fEnvVariation-v">0%</div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /row2 -->
+
+  <!-- ③ MODULATE -->
+  <div class="section-hdr"><span class="section-step">3</span> Modulate</div>
+  <div class="row-mod">
+
+    <!-- PITCH ENVELOPE -->
+    <div class="panel" style="--accent:#c040c0; --accent-rgb:192,64,192">
+      <div class="panel-hdr">PITCH ENV
+        <span style="font-size:0.65em;font-weight:400;color:#555;margin-left:4px">negative = pitch drop, positive = upward glide</span>
+      </div>
+      <div class="env-viz-wrap">
+        <svg viewBox="0 0 120 36" preserveAspectRatio="none">
+          <path id="penv-path" d="M0,18 L4,18 L16,2 L40,18" stroke="#c040c0" stroke-width="1.5" fill="rgba(192,64,192,0.08)"/>
+        </svg>
+      </div>
+      <div class="params">
+        <div class="p-slot">
+          <div class="p-lbl">AMOUNT</div>
+          <input type="range" id="pitchEnvAmount" min="-24" max="24" value="0" step="0.5">
+          <div class="p-val" id="pitchEnvAmount-v">0 st</div>
+        </div>
+        <div class="p-slot">
+          <div class="p-lbl">ATK</div>
+          <input type="range" id="pitchEnvAttack" min="0" max="500" value="2" step="1">
+          <div class="p-val" id="pitchEnvAttack-v">2 ms</div>
+        </div>
+        <div class="p-slot">
+          <div class="p-lbl">DEC</div>
+          <input type="range" id="pitchEnvDecay" min="5" max="2000" value="150" step="5">
+          <div class="p-val" id="pitchEnvDecay-v">150 ms</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- LFO 1 -->
+    <div class="panel" style="--accent:var(--c-lfo); --accent-rgb:160,96,224">
+      <div class="panel-hdr">
+        LFO 1 <span class="lfo-active-chip" id="lfo1-chip">CUTOFF</span>
+        <button class="panel-toggle active" id="lfo-toggle" data-param="lfoEnabled" title="Enable LFO 1">⏻</button>
+      </div>
+      <div class="lfo-target-sel">
+        <button class="lfo-target-btn active" data-lfo="lfoTarget" data-target="cutoff"   title="Filter cutoff freq">CUTOFF</button>
+        <button class="lfo-target-btn"        data-lfo="lfoTarget" data-target="pitch"    title="OSC A+B detune (vibrato)">TUNE A+B</button>
+        <button class="lfo-target-btn"        data-lfo="lfoTarget" data-target="amp"      title="Master volume (tremolo)">VOL</button>
+        <button class="lfo-target-btn"        data-lfo="lfoTarget" data-target="res"      title="Filter resonance Q">RES</button>
+        <button class="lfo-target-btn"        data-lfo="lfoTarget" data-target="noise"    title="Noise level">NOISE</button>
+        <button class="lfo-target-btn"        data-lfo="lfoTarget" data-target="oscAlevel" title="OSC A level only">OSC A</button>
+        <button class="lfo-target-btn"        data-lfo="lfoTarget" data-target="oscBlevel" title="OSC B level only">OSC B</button>
+        <button class="lfo-target-btn"        data-lfo="lfoTarget" data-target="lfo2rate"  title="Modulate LFO 2 rate → speed variation">LFO2 RATE</button>
+      </div>
+      <div class="lfo-target-desc" id="lfo1-desc">Filter cutoff frequency → wobble</div>
+      <div class="lfo-mult-row">
+        <span class="lfo-mult-lbl">CYCLES</span>
+        <button class="lfo-mult-btn active" data-lfo="1" data-mult="1">×1</button>
+        <button class="lfo-mult-btn"        data-lfo="1" data-mult="2">×2</button>
+        <button class="lfo-mult-btn"        data-lfo="1" data-mult="4">×4</button>
+        <button class="lfo-mult-btn"        data-lfo="1" data-mult="8">×8</button>
+      </div>
+      <div class="lfo-curve-wrap">
+        <canvas id="lfo1-curve" class="lfo-curve"></canvas>
+      </div>
+      <div class="lfo-preset-row">
+        <button class="lfo-preset-btn" data-lfo="1" data-preset="sine">SIN</button>
+        <button class="lfo-preset-btn" data-lfo="1" data-preset="triangle">TRI</button>
+        <button class="lfo-preset-btn" data-lfo="1" data-preset="saw">SAW</button>
+        <button class="lfo-preset-btn" data-lfo="1" data-preset="ramp">RMP</button>
+        <button class="lfo-preset-btn" data-lfo="1" data-preset="square">SQ</button>
+        <button class="lfo-preset-btn" data-lfo="1" data-preset="bounce">BNCE</button>
+        <button class="lfo-preset-btn" data-lfo="1" data-preset="sah">S&amp;H</button>
+      </div>
+      <div class="params">
+        <div class="p-slot">
+          <div class="p-lbl">RATE</div>
+          <input type="range" id="lfoRate" min="0.05" max="30" value="4" step="0.05">
+          <div class="p-val" id="lfoRate-v">4.0 Hz</div>
+        </div>
+        <div class="p-slot">
+          <div class="p-lbl">DEPTH</div>
+          <input type="range" id="lfoDepth" min="0" max="5000" value="400" step="10">
+          <div class="p-val" id="lfoDepth-v">400 Hz</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- LFO 2 -->
+    <div class="panel" style="--accent:#60a0e0; --accent-rgb:96,160,224">
+      <div class="panel-hdr">
+        LFO 2 <span class="lfo-active-chip" id="lfo2-chip">TUNE A+B</span>
+        <button class="panel-toggle" id="lfo2-toggle" data-param="lfo2Enabled" title="Enable LFO 2">⏻</button>
+      </div>
+      <div class="lfo-target-sel">
+        <button class="lfo-target-btn"        data-lfo="lfo2Target" data-target="cutoff"    title="Filter cutoff freq">CUTOFF</button>
+        <button class="lfo-target-btn active" data-lfo="lfo2Target" data-target="pitch"     title="OSC A+B detune (vibrato)">TUNE A+B</button>
+        <button class="lfo-target-btn"        data-lfo="lfo2Target" data-target="amp"       title="Master volume (tremolo)">VOL</button>
+        <button class="lfo-target-btn"        data-lfo="lfo2Target" data-target="res"       title="Filter resonance Q">RES</button>
+        <button class="lfo-target-btn"        data-lfo="lfo2Target" data-target="noise"     title="Noise level">NOISE</button>
+        <button class="lfo-target-btn"        data-lfo="lfo2Target" data-target="oscAlevel" title="OSC A level only">OSC A</button>
+        <button class="lfo-target-btn"        data-lfo="lfo2Target" data-target="oscBlevel" title="OSC B level only">OSC B</button>
+        <button class="lfo-target-btn"        data-lfo="lfo2Target" data-target="lfo1rate"  title="Modulate LFO 1 rate → speed variation">LFO1 RATE</button>
+      </div>
+      <div class="lfo-target-desc" id="lfo2-desc">OSC A + B detune → vibrato (both oscillators)</div>
+      <div class="lfo-mult-row">
+        <span class="lfo-mult-lbl">CYCLES</span>
+        <button class="lfo-mult-btn active" data-lfo="2" data-mult="1">×1</button>
+        <button class="lfo-mult-btn"        data-lfo="2" data-mult="2">×2</button>
+        <button class="lfo-mult-btn"        data-lfo="2" data-mult="4">×4</button>
+        <button class="lfo-mult-btn"        data-lfo="2" data-mult="8">×8</button>
+      </div>
+      <div class="lfo-curve-wrap">
+        <canvas id="lfo2-curve" class="lfo-curve"></canvas>
+      </div>
+      <div class="lfo-preset-row">
+        <button class="lfo-preset-btn" data-lfo="2" data-preset="sine">SIN</button>
+        <button class="lfo-preset-btn" data-lfo="2" data-preset="triangle">TRI</button>
+        <button class="lfo-preset-btn" data-lfo="2" data-preset="saw">SAW</button>
+        <button class="lfo-preset-btn" data-lfo="2" data-preset="ramp">RMP</button>
+        <button class="lfo-preset-btn" data-lfo="2" data-preset="square">SQ</button>
+        <button class="lfo-preset-btn" data-lfo="2" data-preset="bounce">BNCE</button>
+        <button class="lfo-preset-btn" data-lfo="2" data-preset="sah">S&amp;H</button>
+      </div>
+      <div class="params">
+        <div class="p-slot">
+          <div class="p-lbl">RATE</div>
+          <input type="range" id="lfo2Rate" min="0.05" max="30" value="0.5" step="0.05">
+          <div class="p-val" id="lfo2Rate-v">0.50 Hz</div>
+        </div>
+        <div class="p-slot">
+          <div class="p-lbl">DEPTH</div>
+          <input type="range" id="lfo2Depth" min="0" max="5000" value="50" step="5">
+          <div class="p-val" id="lfo2Depth-v">50 Hz</div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /row-mod -->
+
+  <!-- ✦ AI GENERATE -->
+  <div class="section-hdr ai-hdr"><span class="section-step">✦</span> AI Generate</div>
+  <div class="row-ai">
+
+    <div class="ai-card">
+      <div class="ai-card-title">Wobble Pattern</div>
+      <div class="ai-card-desc">Generates a complete wobble bass patch — LFO rate, filter envelope, pitch drop — in one click.</div>
+      <span class="ai-card-tag">LFO · FILTER ENV · PITCH</span>
+      <button class="ai-card-btn" id="ai-wobble-btn">✨ Generate Wobble</button>
+    </div>
+
+    <div class="ai-card">
+      <div class="ai-card-title">Filter Sweep</div>
+      <div class="ai-card-desc">Creates an expressive filter frequency sweep — sets cutoff, resonance, and filter env curve shape (steps, bounce, or smooth).</div>
+      <span class="ai-card-tag">CUTOFF · RES · FILTER ENV</span>
+      <button class="ai-card-btn" id="ai-filter-btn">✨ Generate Sweep</button>
+    </div>
+
+    <div class="ai-card">
+      <div class="ai-card-title">Envelope Curves</div>
+      <div class="ai-card-desc">Randomises both AMP and FILTER envelope shapes — picks a random mode (smooth, steps, or bounce) and generates the curve.</div>
+      <span class="ai-card-tag">AMP ENV · FILTER ENV</span>
+      <button class="ai-card-btn" id="ai-env-btn">✨ Generate Curves</button>
+    </div>
+
+    <div class="ai-card">
+      <div class="ai-card-title">Sound Layer</div>
+      <div class="ai-card-desc">Randomises oscillator waveforms, detune, mix levels, and noise type to create a new layered texture as a starting point.</div>
+      <span class="ai-card-tag">OSC A · OSC B · NOISE</span>
+      <button class="ai-card-btn" id="ai-layer-btn">✨ Generate Layer</button>
+    </div>
+
+  </div><!-- /row-ai -->
+
+  <!-- Keyboard -->
+  <div class="kb-section">
+    <div class="kb-hdr">
+      <button class="oct-btn" id="oct-down">◄ Octave</button>
+      <span>Keyboard: <strong id="oct-display">C2–B2</strong> &nbsp;·&nbsp; <code style="color:#a060e0">Z/X</code> shift &nbsp;·&nbsp; <code style="color:#a060e0">A–K</code> white &nbsp;<code style="color:#a060e0">W E R T Y U</code> black</span>
+      <button class="oct-btn" id="oct-up">Octave ►</button>
+    </div>
+    <div class="kb-with-wheels">
+
+      <!-- Pitch bend wheel -->
+      <div class="pb-area">
+        <div class="pb-wheel" id="pb-wheel">
+          <div class="pb-center-mark"></div>
+          <div class="pb-track"></div>
+          <div class="pb-thumb" id="pb-thumb"></div>
+        </div>
+        <div class="pb-label">PITCH<br>BEND</div>
+        <div class="pb-val" id="pb-val">0¢</div>
+        <div class="pb-range-btns">
+          <button class="pb-range-btn active" data-range="2">±2</button>
+          <button class="pb-range-btn" data-range="7">±7</button>
+          <button class="pb-range-btn" data-range="12">±12</button>
+        </div>
+      </div>
+
+      <div class="kb-wrap">
+        <div class="piano" id="piano"></div>
+        <div class="oct-lbl-row" id="oct-lbl-row"></div>
+      </div>
+
+    </div>
+  </div>
+
+</div><!-- /synth -->
+
+<script src="synth.js"></script>
+</body>
+</html>

@@ -1,0 +1,98 @@
+# Environment variables
+.env
+.env.local
+.env.production
+.env.*.local
+
+# Dependencies
+node_modules/
+vendor/
+venv/
+__pycache__/
+*.pyc
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+target/
+
+# JUCE/C++ build artifacts
+Builds/
+*.xcodeproj/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+DerivedData/
+*.dSYM/
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.exe
+*.app
+*.vst3
+*.component
+*.aaxplugin
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# Python AI training
+python/venv/
+python/models/*.pth
+python/models/*.onnx
+python/__pycache__/
+python/**/__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+wandb/
+runs/
+checkpoints/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Testing
+coverage/
+.nyc_output/
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# Database
+*.sqlite
+*.db
+
+# Secrets
+*.pem
+*.key
+!public.key
