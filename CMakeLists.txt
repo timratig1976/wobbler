@@ -28,6 +28,8 @@ target_sources(Wobbler
     PRIVATE
         src/plugin/PluginProcessor.cpp
         src/plugin/PluginEditor.cpp
+        src/plugin/WobblerVoice.cpp
+        src/plugin/Sequencer.cpp
         src/dsp/Oscillator.cpp
         src/dsp/Filter.cpp
         src/dsp/Distortion.cpp

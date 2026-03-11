@@ -1,13 +1,7 @@
 #include "Oscillator.h"
 
-Oscillator::Oscillator()
-{
-    generateWavetables();
-}
-
-Oscillator::~Oscillator()
-{
-}
+Oscillator::Oscillator() {}
+Oscillator::~Oscillator() {}
 
 void Oscillator::prepare(double sr)
 {
@@ -15,56 +9,53 @@ void Oscillator::prepare(double sr)
     updatePhaseIncrement();
 }
 
-void Oscillator::setFrequency(float freq)
+void Oscillator::setFrequency(float freqHz)
 {
-    frequency = freq;
+    frequency = juce::jmax(1.0f, freqHz);
     updatePhaseIncrement();
 }
 
-void Oscillator::setWavetablePosition(float position)
+void Oscillator::setDetuneCents(float cents)
 {
-    wavetablePosition = juce::jlimit(0.0f, 1.0f, position);
+    detuneCents = cents;
+    updatePhaseIncrement();
+}
+
+float Oscillator::computeFrequency() const
+{
+    return frequency * std::pow(2.0f, detuneCents / 1200.0f);
 }
 
 void Oscillator::updatePhaseIncrement()
 {
-    phaseIncrement = frequency / static_cast<float>(sampleRate);
-}
-
-void Oscillator::generateWavetables()
-{
-    for (int i = 0; i < wavetableSize; ++i)
-    {
-        float t = static_cast<float>(i) / static_cast<float>(wavetableSize);
-        
-        sineWavetable[i] = std::sin(2.0f * juce::MathConstants<float>::pi * t);
-        
-        sawWavetable[i] = 2.0f * t - 1.0f;
-        
-        squareWavetable[i] = (t < 0.5f) ? 1.0f : -1.0f;
-    }
-}
-
-float Oscillator::getWavetableSample(const std::array<float, wavetableSize>& table, float ph)
-{
-    float index = ph * static_cast<float>(wavetableSize);
-    int index0 = static_cast<int>(index) % wavetableSize;
-    int index1 = (index0 + 1) % wavetableSize;
-    float frac = index - std::floor(index);
-    
-    return table[index0] + frac * (table[index1] - table[index0]);
+    phaseIncrement = computeFrequency() / static_cast<float>(sampleRate);
 }
 
 float Oscillator::processSample()
 {
-    float sawSample = getWavetableSample(sawWavetable, phase);
-    float squareSample = getWavetableSample(squareWavetable, phase);
-    
-    float output = sawSample * 0.7f + squareSample * 0.3f;
-    
+    float output = 0.0f;
+    switch (waveform)
+    {
+        case Waveform::Sine:
+            output = std::sin(2.0f * juce::MathConstants<float>::pi * phase);
+            break;
+        case Waveform::Sawtooth:
+            output = 2.0f * phase - 1.0f;
+            break;
+        case Waveform::Square:
+            output = (phase < 0.5f) ? 1.0f : -1.0f;
+            break;
+        case Waveform::Triangle:
+            output = (phase < 0.5f) ? (4.0f * phase - 1.0f)
+                                    : (3.0f - 4.0f * phase);
+            break;
+    }
     phase += phaseIncrement;
-    if (phase >= 1.0f)
-        phase -= 1.0f;
-    
-    return output * 0.5f;
+    if (phase >= 1.0f) phase -= 1.0f;
+    return output * volume;
+}
+
+float Oscillator::processNoiseSample()
+{
+    return (rng.nextFloat() * 2.0f - 1.0f) * noiseVolume;
 }

@@ -3,1084 +3,680 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Wobbler Synthesizer</title>
+<title>Wobbler Bass Synth</title>
 <style>
-:root {
-  --bg:       #0d0d10;
-  --panel:    #16161c;
-  --panel2:   #1e1e26;
-  --border:   rgba(255,255,255,0.07);
-  --txt:      #ccc;
-  --txt2:     #666;
-  --a-osc:    #4a80ff;
-  --b-osc:    #38b870;
-  --c-filter: #e05828;
-  --c-amp:    #22b8a0;
-  --c-fenv:   #e09020;
-  --c-lfo:    #a060e0;
-  --c-master: #8888aa;
+/* ── Reset & base ─────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  height: 100%;
+  background: #1a1a2e;
+  color: #e8e8f0;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 11px;
+  overflow-x: hidden;
+}
+button { cursor: pointer; font-family: inherit; font-size: 10px; }
+select { font-family: inherit; font-size: 10px; cursor: pointer; }
+input  { font-family: inherit; }
+
+/* ── Layout ───────────────────────────────────────────── */
+#app { display: flex; flex-direction: column; min-height: 100vh; }
+
+/* HEADER */
+#header {
+  display: flex; align-items: center; gap: 16px;
+  padding: 10px 16px;
+  background: #14142a;
+  border-bottom: 1px solid #2a2a45;
+  flex-shrink: 0;
+}
+#header h1 { font-size: 15px; letter-spacing: 3px; color: #fff; text-transform: uppercase; margin-right: auto; }
+#header h1 span { color: #00ffb2; }
+#midi-status {
+  font-size: 9px; letter-spacing: 1px; padding: 3px 8px;
+  border: 1px solid #222244; border-radius: 2px; color: #444;
+}
+#midi-status.active { color: #00ffb2; border-color: #00ffb2; }
+
+#play-btn {
+  padding: 6px 20px; border: 1px solid #00ffb2; border-radius: 3px;
+  background: transparent; color: #00ffb2; font-size: 12px; letter-spacing: 1px;
+  transition: background 0.15s, color 0.15s;
+}
+#play-btn:hover, #play-btn.playing { background: #00ffb2; color: #050510; }
+
+.bpm-ctrl { display: flex; align-items: center; gap: 4px; }
+.bpm-ctrl label { color: #888; font-size: 10px; letter-spacing: 1px; }
+.bpm-btn {
+  width: 20px; height: 20px; border: 1px solid #2a2a4a; border-radius: 2px;
+  background: #0e0e28; color: #aaa; line-height: 1; font-size: 14px;
+}
+.bpm-btn:hover { border-color: #00ffb2; color: #00ffb2; }
+#bpm-input {
+  width: 44px; text-align: center; background: #0e0e28;
+  border: 1px solid #2a2a4a; border-radius: 2px; color: #fff;
+  padding: 2px 4px; font-size: 13px;
 }
 
-* { margin:0; padding:0; box-sizing:border-box; }
-
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  background: var(--bg);
-  color: var(--txt);
-  min-height: 100vh;
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+/* MAIN: 3-column voices */
+#voices {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 0; background: #0d0d1e;
+  flex-shrink: 0;
 }
 
-/* ── Header ── */
-.hdr {
-  width: 100%;
-  max-width: 1160px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 12px 10px;
+.voice-col {
+  background: #0d0d1e;
+  overflow-y: auto; max-height: 72vh;
+  padding: 10px 10px 20px;
 }
-.logo {
-  font-size: 1.5em;
-  font-weight: 900;
-  letter-spacing: 3px;
-  background: linear-gradient(135deg,#4a80ff,#a060e0);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-.logo-sub { font-size: 0.65em; color: var(--txt2); letter-spacing: 1px; font-weight: 400; display: block; }
-.hdr-right { display: flex; gap: 8px; align-items: center; }
-.ai-btn {
-  background: linear-gradient(135deg,#4a80ff,#a060e0);
-  color:#fff; border:none; padding:7px 18px; border-radius:20px;
-  font-size:0.8em; font-weight:700; cursor:pointer; letter-spacing:0.5px;
-  transition: opacity 0.2s;
-}
-.ai-btn:hover { opacity:0.85; }
+.voice-col::-webkit-scrollbar { width: 4px; }
+.voice-col::-webkit-scrollbar-track { background: #0a0a18; }
+.voice-col::-webkit-scrollbar-thumb { background: #2a2a45; border-radius: 2px; }
 
-/* ── Synth body ── */
-.synth { width:100%; max-width:1160px; display:flex; flex-direction:column; gap:8px; }
-
-/* ── Panel base ── */
-.panel {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px 12px 12px;
-  position: relative;
-}
-.panel-hdr {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 10px;
-  font-size: 0.7em;
-  font-weight: 800;
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  color: var(--accent, #888);
-}
-.panel-hdr::before {
-  content: '';
-  display: inline-block;
-  width: 3px; height: 12px;
-  background: var(--accent, #888);
-  border-radius: 2px;
+.voice-header {
+  font-size: 12px; letter-spacing: 3px; color: var(--accent);
+  padding: 4px 0 12px; text-transform: uppercase; font-weight: bold;
+  display: flex; align-items: center; gap: 8px; justify-content: space-between;
 }
 
-/* ── Workflow row layouts ── */
-.row-sound  { display: grid; grid-template-columns: 1fr 1fr 1fr;         gap: 8px; }
-.row-filter { display: grid; grid-template-columns: 1fr;                 gap: 8px; }
-.row2       { display: grid; grid-template-columns: 1fr 1fr;              gap: 8px; }
-.row-mod    { display: grid; grid-template-columns: 1fr 1fr 1fr;          gap: 8px; }
-
-/* ── LFO curve canvas ── */
-.lfo-curve-wrap {
-  margin: 6px 0 4px; border-radius: 5px; overflow: hidden;
-  border: 1px solid var(--border); cursor: crosshair;
-}
-.lfo-curve { display: block; width: 100%; height: 64px; touch-action: none; }
-.lfo-mult-row {
-  display: flex; align-items: center; gap: 3px; margin: 5px 0 3px;
-}
-.lfo-mult-lbl {
-  font-size: 0.54em; font-weight: 800; letter-spacing: 0.5px;
-  color: rgba(255,255,255,0.2); text-transform: uppercase; margin-right: 2px;
-  white-space: nowrap;
-}
-.lfo-mult-btn {
-  flex: 1; background: var(--panel2); border: 1px solid var(--border);
-  border-radius: 4px; padding: 3px 2px; cursor: pointer;
-  font-size: 0.65em; font-weight: 800; letter-spacing: 0.2px;
-  color: var(--txt2); text-align: center; transition: all 0.12s; font-family: monospace;
-}
-.lfo-mult-btn.active, .lfo-mult-btn:hover {
-  background: rgba(var(--accent-rgb,160,96,224),0.2);
-  border-color: var(--accent,#a060e0); color: var(--accent,#a060e0);
-}
-.lfo-preset-row {
-  display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; margin: 4px 0 8px;
-}
-.lfo-preset-btn {
-  flex: 1; background: var(--panel2); border: 1px solid var(--border);
-  border-radius: 4px; padding: 3px 2px; cursor: pointer;
-  font-size: 0.58em; font-weight: 800; letter-spacing: 0.3px;
-  color: var(--txt2); text-align: center; transition: all 0.12s;
-}
-.lfo-preset-btn:hover {
-  background: rgba(var(--accent-rgb,160,96,224),0.15);
-  border-color: var(--accent,#a060e0); color: var(--accent,#a060e0);
-}
-.lfo-preset-btn:active { transform: scale(0.95); }
-
-/* ── LFO routing chip in header ── */
-.lfo-active-chip {
-  font-size: 0.58em; font-weight: 800; letter-spacing: 0.3px;
-  color: var(--accent); background: rgba(var(--accent-rgb),0.15);
-  border: 1px solid rgba(var(--accent-rgb),0.35);
-  border-radius: 3px; padding: 1px 6px; margin-left: 5px;
-  vertical-align: middle;
-}
-/* ── LFO target description ── */
-.lfo-target-desc {
-  font-size: 0.58em; color: rgba(255,255,255,0.22); font-style: italic;
-  margin: -2px 0 6px; min-height: 1.2em; line-height: 1.4;
-}
-/* ── LFO target selector ── */
-.lfo-target-sel {
-  display: grid; grid-template-columns: repeat(4, 1fr);
-  gap: 3px; margin: 5px 0 4px;
-}
-.lfo-target-btn {
-  background: var(--panel2); border: 1px solid var(--border);
-  border-radius: 4px; padding: 4px 2px; cursor: pointer;
-  font-size: 0.57em; font-weight: 800; letter-spacing: 0.3px;
-  color: var(--txt2); text-align: center; transition: all 0.15s; white-space: nowrap;
-}
-.lfo-target-btn.active, .lfo-target-btn:hover {
-  background: rgba(var(--accent-rgb,160,96,224),0.15);
-  border-color: var(--accent,#a060e0); color: var(--accent,#a060e0);
-}
-.row-ai     { display: grid; grid-template-columns: repeat(4, 1fr);       gap: 8px; }
-
-/* ── Waveform selector ── */
-.wave-sel { display: flex; gap: 4px; margin-bottom: 10px; }
-.wave-btn {
-  flex: 1;
-  background: var(--panel2);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 5px 2px;
-  cursor: pointer;
-  color: var(--txt2);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.15s;
-}
-.wave-btn:hover  { border-color: var(--accent,#888); color: var(--accent,#888); }
-.wave-btn.active { background: rgba(var(--accent-rgb,100,120,200),0.18); border-color: var(--accent,#888); color: var(--accent,#888); }
-.wave-btn svg    { width:28px; height:16px; }
-
-/* ── Curve / small toggle buttons ── */
-.curve-btns { display: flex; gap: 3px; margin-left: auto; }
-.curve-btn {
-  background: var(--panel2); border: 1px solid var(--border);
-  border-radius: 4px; padding: 2px 7px; cursor: pointer;
-  color: var(--txt2); font-size: 0.65em; font-weight: 800; letter-spacing: 0.5px;
-  transition: all 0.15s;
-}
-.curve-btn:hover  { border-color: var(--accent,#888); color: var(--accent,#888); }
-.curve-btn.active { background: rgba(var(--accent-rgb,100,120,200),0.18); border-color: var(--accent,#888); color: var(--accent,#888); }
-
-/* ── Filter type selector ── */
-.ftype-sel { display: flex; gap: 4px; margin-bottom: 10px; flex-wrap: wrap; }
-.ftype-btn {
-  flex: 1;
-  background: var(--panel2);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 4px 2px;
-  cursor: pointer;
-  color: var(--txt2);
-  font-size: 0.7em;
-  font-weight: 800;
-  letter-spacing: 0.5px;
-  text-align: center;
-  min-width: 32px;
-  transition: all 0.15s;
-}
-.ftype-btn:hover  { border-color: var(--c-filter); color: var(--c-filter); }
-.ftype-btn.active { background: rgba(224,88,40,0.15); border-color: var(--c-filter); color: var(--c-filter); }
-
-/* ── Parameter slots ── */
-.params     { display: flex; gap: 6px; flex-wrap: wrap; }
-.p-slot     { display: flex; flex-direction: column; align-items: center; gap: 2px; flex: 1; min-width: 44px; }
-.p-lbl      { font-size: 8.5px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--txt2); white-space: nowrap; }
-.p-val      { font-size: 9.5px; font-weight: 700; color: #fff; white-space: nowrap; }
-
-input[type="range"] {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 100%;
-  height: 3px;
-  background: rgba(255,255,255,0.1);
-  border-radius: 2px;
-  outline: none;
-  cursor: pointer;
-}
-input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 12px; height: 12px;
-  border-radius: 50%;
-  background: var(--accent, #888);
-  cursor: pointer;
-  box-shadow: 0 0 4px rgba(0,0,0,0.5);
-}
-input[type="range"]::-moz-range-thumb {
-  width:12px; height:12px;
-  border-radius:50%;
-  background: var(--accent,#888);
-  border:none; cursor:pointer;
-}
-
-/* ── Env visualizer (old small SVG, still used by PITCH ENV) ── */
-.env-viz-wrap {
-  width: 100%;
-  height: 36px;
+/* Sections */
+.v-sec {
   margin-bottom: 8px;
-  background: rgba(0,0,0,0.3);
+  background: #15152a;
+  border: 1px solid #2a2a45;
   border-radius: 4px;
-  overflow: hidden;
+  padding: 8px 10px 10px;
 }
-.env-viz-wrap svg { width:100%; height:100%; }
+.sec-hdr {
+  font-size: 9px; letter-spacing: 2px; color: var(--accent, #00ffb2);
+  padding-bottom: 6px; margin-bottom: 8px;
+  text-transform: uppercase;
+  display: flex; align-items: center; gap: 6px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.sec-bypass-btn {
+  margin-left: auto; padding: 1px 5px; flex-shrink: 0;
+  border: 1px solid #333355; border-radius: 2px;
+  background: transparent; color: #555; font-size: 7px; letter-spacing: 1px;
+  cursor: pointer; transition: all 0.15s;
+}
+.sec-bypass-btn.active { border-color: var(--accent); color: var(--accent); }
+.sec-bypass-btn:not(.active) { border-color: #ff4466; color: #ff4466; }
+.v-sec.sec-bypassed > *:not(.sec-hdr) { opacity: 0.3; pointer-events: none; }
+.sec-hdr::before {
+  content: ''; display: block; width: 2px; height: 9px;
+  background: var(--accent, #00ffb2); border-radius: 1px; flex-shrink: 0;
+  opacity: 0.7;
+}
 
-/* ── Canvas envelope editor ── */
-.env-canvas-wrap {
-  width: 100%;
-  margin-bottom: 10px;
-  border-radius: 5px;
-  overflow: hidden;
-  cursor: default;
-  position: relative;
+/* Button rows */
+.btn-row { display: flex; gap: 3px; flex-wrap: nowrap; margin-bottom: 4px; }
+
+.wave-btn, .ftype-btn {
+  padding: 4px 8px; border: 1px solid #3a3a55; border-radius: 2px;
+  background: #222240; color: #aaa; transition: all 0.1s; font-size: 8px;
+  letter-spacing: 0.5px; white-space: nowrap; flex-shrink: 0;
 }
-.env-canvas {
+.wave-btn:hover, .ftype-btn:hover { border-color: #66ffb2; color: #ccc; }
+.wave-btn.active, .ftype-btn.active {
+  background: #66ffb2; color: #0a0a14; border-color: #66ffb2;
+  box-shadow: 0 0 3px rgba(102,255,178,0.4);
+}
+
+/* Knobs */
+.knob-row {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  justify-content: flex-start; align-items: flex-end;
+}
+.knob-wrap { display: flex; flex-direction: column; align-items: center; width: 54px; }
+.knob-val  { font-size: 9px; color: #ccc; text-align: center; margin-top: 2px; min-height: 12px; }
+.knob-lbl  { font-size: 8px; color: #888; text-align: center; letter-spacing: 1px; margin-top: 1px; }
+
+/* LFO section */
+.lfo-sec { padding: 0 !important; background: transparent !important; border: none !important; }
+.lfo-sec .sec-hdr { margin-bottom: 6px; }
+
+.lfo-row {
+  background: #16163a;
+  border: 1px solid #252560;
+  border-radius: 4px;
+  padding: 4px 8px;
+  margin-bottom: 5px;
+}
+.lfo-row:last-child { margin-bottom: 0; }
+.lfo-row.lfo-disabled { opacity: 0.5; }
+
+.lfo-row-hdr {
+  display: flex; align-items: center; gap: 6px;
+  padding: 2px 0 4px;
+}
+.lfo-en-btn {
+  margin-left: auto; padding: 1px 7px; border-radius: 2px; font-size: 8px;
+  border: 1px solid #333360; background: #1a1a38; color: #555; letter-spacing: 1px;
+  cursor: pointer;
+}
+.lfo-en-btn.active { border-color: #66ffb2; color: #66ffb2; background: rgba(0,0,0,0.4); }
+
+.lfo-row-body { padding-bottom: 4px; }
+
+.lfo-row-top {
+  display: flex; align-items: center; gap: 5px;
+  margin-bottom: 6px; flex-wrap: wrap;
+}
+.lfo-row-bot {
+  display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap;
+}
+
+.lfo-num {
+  font-size: 8px; color: #66ffb2; width: 14px; height: 14px;
+  border: 1px solid currentColor; border-radius: 2px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; opacity: 0.8; font-weight: bold;
+}
+.lfo-wave { display: flex; gap: 2px; }
+.lfo-w-btn {
+  min-width: 22px; height: 18px; border: 1px solid #2a2a50; border-radius: 2px;
+  background: #1a1a38; color: #888; font-size: 8px; padding: 0 4px;
+}
+.lfo-w-btn.active {
+  background: #66ffb2; color: #050510;
+  border-color: #66ffb2; font-weight: bold;
+}
+.lfo-knob-wrap .knob-wrap { width: 48px; }
+.lfo-knob-wrap .knob-wrap canvas { width: 40px !important; height: 40px !important; }
+
+.lfo-sync-btn {
+  padding: 2px 6px; border: 1px solid #2a2a50; border-radius: 2px;
+  background: #1a1a38; color: #888; font-size: 8px;
+}
+.lfo-sync-btn.active { border-color: #66ffb2; color: #66ffb2; background: rgba(0,0,0,0.4); }
+
+.mini-sel {
+  background: #1a1a38; border: 1px solid #2a2a50; border-radius: 2px;
+  color: #bbb; padding: 2px 4px; max-width: 68px; min-width: 40px;
+  appearance: none; -webkit-appearance: none; text-align: center; font-size: 9px;
+}
+.mini-sel:focus { outline: none; border-color: #66ffb2; color: #ccc; }
+
+.lfo-meta-row { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+.lfo-meta-lbl { font-size: 8px; color: #555; letter-spacing: 1px; }
+
+/* SEQUENCER (in voice columns) */
+.voice-seq-section {
+  margin-top: 4px;
+}
+.voice-seq-play-btn {
+  margin-left: auto; padding: 1px 7px; flex-shrink: 0;
+  border: 1px solid #2a2a45; border-radius: 2px;
+  background: #1a1a30; color: #666; font-size: 9px;
+  transition: all 0.15s; cursor: pointer; line-height: 1.4;
+}
+.voice-seq-play-btn:hover { border-color: var(--accent); color: var(--accent); }
+.voice-seq-play-btn.active { 
+  border-color: var(--accent); color: var(--accent);
+}
+.seq-grid {
+  display: grid; grid-template-columns: repeat(8, 1fr);
+  gap: 3px;
+}
+.seq-cell { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.seq-btn {
+  width: 100%; height: 28px; border: 1px solid #2a2a4a; border-radius: 2px;
+  background: #18183a; color: #666; font-size: 9px;
+  transition: all 0.1s;
+}
+.seq-btn:hover  { border-color: #66ffb2; color: #aaa; }
+.seq-btn.active { background: #0d2a20; border-color: #66ffb2; color: #66ffb2; }
+.seq-btn.playing{ background: #66ffb2 !important; color: #050510 !important; box-shadow: 0 0 8px #66ffb2; }
+
+.seq-note {
+  width: 100%; background: #14142e; border: 1px solid #1e1e38;
+  border-radius: 2px; color: #666; padding: 1px 0; font-size: 9px;
+  text-align: center; appearance: none; -webkit-appearance: none;
+}
+.seq-note:focus { border-color: #66ffb2; outline: none; }
+
+.seq-acc {
+  width: 100%; height: 14px; border: 1px solid #1e1e38; border-radius: 2px;
+  background: #14142e; color: #555; font-size: 9px; line-height: 1; padding: 0;
+}
+.seq-acc.active { background: #3a1a00; border-color: #ff6b35; color: #ff6b35; }
+
+/* MASTER */
+#master-section {
+  background: #0f0f24;
+  padding: 10px 14px; display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start;
+  flex-shrink: 0;
+}
+#master-section .sec-hdr { width: 100%; margin-bottom: 2px; }
+
+.mix-row { display: flex; gap: 12px; }
+.mix-col { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.mix-lbl { font-size: 9px; letter-spacing: 1px; }
+.mix-mute-btn {
+  padding: 2px 8px; border: 1px solid #222244; border-radius: 2px;
+  background: #0e0e28; color: #555; font-size: 9px;
+}
+.mix-mute-btn.active { background: #3a0a0a; border-color: #ff4444; color: #ff4444; }
+.mix-btn-row { display:flex; gap:3px; }
+.mix-solo-btn {
+  padding: 2px 8px; border: 1px solid #222244; border-radius: 2px;
+  background: #0e0e28; color: #555; font-size: 9px;
+}
+.mix-solo-btn.active { background: #2a2500; border-color: #ffcc00; color: #ffcc00; }
+
+.fx-row { flex-wrap: nowrap; gap: 10px; }
+
+/* Visualizer */
+.viz-container {
+  display: flex; flex-direction: column; gap: 4px; flex: 1;
+}
+.viz-controls {
+  display: flex; gap: 4px; align-items: center;
+}
+.viz-toggle-btn {
+  padding: 3px 10px; border: 1px solid #2a2a4a; border-radius: 2px;
+  background: #0e0e28; color: #888; font-size: 9px; letter-spacing: 1px;
+  transition: all 0.15s;
+}
+.viz-toggle-btn.active {
+  background: #66ffb2; color: #050510; border-color: #66ffb2;
+}
+.viz-metrics {
+  margin-left: auto; display: flex; gap: 12px; font-size: 9px; color: #666;
+}
+.viz-metric { letter-spacing: 0.5px; }
+.viz-metric-val { color: #66ffb2; font-weight: bold; }
+#viz {
+  flex: 1; min-width: 200px; height: 80px;
+  border: 1px solid #1a1a3a; border-radius: 3px;
+  display: block;
+}
+
+/* Glow effect on accent elements */
+.wave-btn.active   { box-shadow: 0 0 6px #66ffb2; }
+.seq-btn.active    { box-shadow: 0 0 4px rgba(102,255,178,0.3); }
+
+/* Per-voice power toggle */
+.voice-toggle {
+  margin-left: auto; display: flex; align-items: center; gap: 6px; flex-shrink: 0;
+}
+.voice-toggle-lbl { font-size: 8px; color: #555; letter-spacing: 1px; transition: color 0.15s; }
+.voice-toggle input { display: none; }
+.voice-toggle-track {
+  position: relative; width: 30px; height: 16px; cursor: pointer;
+  background: #1a1a38; border: 1px solid #252550; border-radius: 8px;
+  transition: background 0.2s, border-color 0.2s; flex-shrink: 0;
+}
+.voice-toggle-track::after {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 10px; height: 10px; border-radius: 50%;
+  background: #333355; transition: left 0.2s, background 0.2s;
+}
+.voice-toggle input:checked + .voice-toggle-track {
+  background: #66ffb2; border-color: #66ffb2;
+  box-shadow: 0 0 6px #66ffb2;
+}
+.voice-toggle input:checked + .voice-toggle-track::after {
+  left: 16px; background: #050510;
+}
+.voice-toggle input:checked ~ .voice-toggle-lbl { color: #66ffb2; }
+
+/* Dim entire column when voice is off */
+.voice-col.voice-off .v-sec {
+  opacity: 0.25; pointer-events: none; transition: opacity 0.2s;
+}
+.voice-col.voice-off .osc-wave-preview { opacity: 0.25; transition: opacity 0.2s; }
+
+/* Waveform preview canvas */
+.osc-wave-preview {
   display: block;
   width: 100%;
-  height: 130px;
-  border-radius: 5px;
-}
-.env-canvas-hint {
-  position: absolute;
-  bottom: 3px; right: 6px;
-  font-size: 8px; color: rgba(255,255,255,0.2);
-  pointer-events: none; letter-spacing: 0.5px;
+  height: 82px;
+  border-radius: 3px;
+  background: #0a0a18;
+  border: 1px solid #1a1a30;
+  margin-bottom: 6px;
+  cursor: default;
 }
 
-/* ── Amount slider (can be negative) ── */
-.p-slot.bipolar .p-val { color: #e09020; }
-
-/* ── Master volume (header) ── */
-.hdr-vol {
-  display: flex; align-items: center; gap: 7px;
-  padding: 0 12px 0 0;
-  border-right: 1px solid rgba(255,255,255,0.08);
-  margin-right: 4px;
+/* 2-column Filter layout */
+.filter-cols {
+  display: flex; gap: 8px; align-items: flex-start;
 }
-.hdr-vol-lbl {
-  font-size: 0.62em; font-weight: 800; letter-spacing: 0.5px;
-  color: rgba(255,255,255,0.3); text-transform: uppercase; white-space: nowrap;
+.filter-left { flex: 2; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.filter-right {
+  flex: 1; max-width: 33%; min-width: 70px; display: flex; flex-direction: column; gap: 4px;
+  background: #0a0a1e; border: 1px solid #141430;
+  border-radius: 3px; padding: 6px 6px 8px;
 }
-#volume {
-  -webkit-appearance: none; appearance: none;
-  width: 80px; height: 3px; border-radius: 2px; outline: none; cursor: pointer;
-  background: linear-gradient(to right, #8888aa calc(var(--pct,65) * 1%), rgba(255,255,255,0.1) calc(var(--pct,65) * 1%));
+.filter-curve {
+  display: block; width: 100%; height: 90px;
+  border-radius: 3px; background: #15152a;
+  border: 1px solid #252545;
 }
-#volume::-webkit-slider-thumb {
-  -webkit-appearance: none; width: 11px; height: 11px;
-  border-radius: 50%; background: #aaaacc; cursor: pointer;
-}
-.hdr-vol-val {
-  font-size: 0.62em; font-weight: 700; color: rgba(255,255,255,0.35);
-  min-width: 28px; text-align: right;
+.filter-curve-labels {
+  display: flex; justify-content: space-between;
+  font-size: 7px; color: #444; padding: 0 2px; margin-top: 1px;
 }
 
-/* ── Keyboard section ── */
-.kb-section {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px 12px 14px;
+/* Distortion — 2-column layout matching ADSR */
+.dist-cols {
+  display: flex; gap: 8px; align-items: stretch;
 }
-.kb-hdr {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 10px;
-  font-size: 0.75em;
-  color: var(--txt2);
+.dist-left  { flex: 2; min-width: 0; display: flex; flex-direction: column; gap: 6px; justify-content: center; }
+.dist-right {
+  flex: 1; min-width: 80px; max-width: 40%; display: flex; flex-direction: column;
+  background: #0a0a1e; border: 1px solid #141430;
+  border-radius: 3px; padding: 4px;
 }
-.kb-hdr strong { color: var(--a-osc); }
-.oct-btn {
-  background: rgba(74,128,255,0.15);
-  color: var(--a-osc);
-  border: 1px solid rgba(74,128,255,0.3);
-  padding: 4px 12px;
-  border-radius: 14px;
-  font-size: 0.75em;
-  font-weight: 700;
-  cursor: pointer;
-  transition: background 0.2s;
-}
-.oct-btn:hover { background: rgba(74,128,255,0.3); }
-
-.kb-wrap {
-  overflow-x: auto;
-  overflow-y: visible;
-  padding-bottom: 26px;
-}
-.kb-wrap::-webkit-scrollbar { height: 4px; }
-.kb-wrap::-webkit-scrollbar-thumb { background: rgba(74,128,255,0.3); border-radius: 2px; }
-
-.piano { position:relative; display:inline-block; height:148px; user-select:none; }
-
-.wkey {
-  display: inline-block;
-  width: 34px; height: 148px;
-  background: linear-gradient(180deg,#f0f0f0,#d8d8d8);
-  border: 1px solid #555;
-  border-radius: 0 0 5px 5px;
-  position: relative;
-  cursor: pointer;
-  vertical-align: top;
-  box-shadow: 1px 3px 5px rgba(0,0,0,0.5), inset 0 -2px 4px rgba(0,0,0,0.08);
-  transition: background 0.04s;
-}
-.wkey:hover { background: linear-gradient(180deg,#dde8ff,#c0ccee); }
-.wkey.active {
-  background: linear-gradient(180deg,#4a80ff,#a060e0);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.5);
-  transform: translateY(2px);
-}
-.wkey .klabel {
-  position:absolute; bottom:4px; left:50%; transform:translateX(-50%);
-  font-size:7.5px; color:#aaa; font-weight:700; pointer-events:none; white-space:nowrap;
-}
-.wkey.active .klabel { color:rgba(255,255,255,0.8); }
-.wkey .kbind {
-  position:absolute; bottom:16px; left:50%; transform:translateX(-50%);
-  font-size:8px; color:#bbb; font-weight:700;
-  background:rgba(0,0,0,0.12); border-radius:2px; padding:1px 3px;
-  pointer-events:none;
-}
-.wkey.active .kbind { color:rgba(255,255,255,0.65); }
-
-.bkey {
-  width:20px; height:92px;
-  background: linear-gradient(180deg,#383838,#111);
-  border:1px solid #000; border-top:1px solid #555;
-  border-radius:0 0 4px 4px;
-  position:absolute; top:0; z-index:2; cursor:pointer;
-  box-shadow: 1px 4px 8px rgba(0,0,0,0.9), inset 0 -2px 4px rgba(0,0,0,0.5);
-  transition: background 0.04s;
-}
-.bkey:hover { background: linear-gradient(180deg,#4a5,#212); }
-.bkey.active {
-  background: linear-gradient(180deg,#4a80ff,#a060e0);
-  box-shadow:0 2px 4px rgba(0,0,0,0.9);
-  transform:translateY(2px);
-}
-.bkey .klabel {
-  position:absolute; bottom:3px; left:50%; transform:translateX(-50%);
-  font-size:7px; color:#777; font-weight:700; pointer-events:none; white-space:nowrap;
-}
-.bkey.active .klabel { color:rgba(255,255,255,0.75); }
-.bkey .kbind {
-  position:absolute; bottom:16px; left:50%; transform:translateX(-50%);
-  font-size:7px; color:#999; font-weight:700;
-  background:rgba(0,0,0,0.3); border-radius:2px; padding:1px 2px;
-  pointer-events:none;
-}
-.bkey.active .kbind { color:rgba(255,255,255,0.65); }
-
-.oct-sep {
-  position:absolute; top:0; width:2px; height:148px;
-  background:rgba(74,128,255,0.2); z-index:3; pointer-events:none;
-}
-.oct-lbl-row { position:relative; height:18px; }
-.oct-lbl { position:absolute; font-size:8px; color:#444; font-weight:700; letter-spacing:0.5px; }
-
-/* ── Panel enable/disable toggle ── */
-.panel-hdr { display: flex; align-items: center; gap: 6px; }
-.panel-toggle {
-  margin-left: auto; flex-shrink: 0;
-  background: none; border: 1px solid rgba(255,255,255,0.15); border-radius: 4px;
-  width: 24px; height: 16px; cursor: pointer; font-size: 10px;
-  color: rgba(255,255,255,0.25); display: inline-flex; align-items: center;
-  justify-content: center; padding: 0; transition: all 0.15s;
-}
-.panel-toggle.active {
-  color: var(--accent,#888); border-color: var(--accent,#888);
-  background: rgba(var(--accent-rgb,128,128,128),0.15);
-}
-.panel-disabled { opacity: 0.4; pointer-events: none; }
-.panel-disabled .panel-toggle { pointer-events: auto; opacity: 1; }
-
-/* ── Envelope mode row ── */
-.env-mode-row { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; }
-.env-mode-btns { display: flex; gap: 3px; }
-.env-mode-btn {
-  background: var(--panel2); border: 1px solid var(--border); border-radius: 4px;
-  padding: 3px 8px; color: var(--txt2); font-size: 0.63em; font-weight: 800;
-  letter-spacing: 0.5px; cursor: pointer; transition: all 0.15s; text-transform: uppercase;
-}
-.env-mode-btn.active {
-  background: rgba(var(--accent-rgb,128,128,128),0.15);
-  border-color: var(--accent,#888); color: var(--accent,#888);
-}
-.env-auto-btn {
-  margin-left: auto;
-  background: rgba(var(--accent-rgb,128,128,128),0.08);
-  border: 1px solid rgba(var(--accent-rgb,128,128,128),0.3); border-radius: 4px;
-  padding: 3px 9px; color: var(--accent,#888); font-size: 0.63em; font-weight: 800;
-  cursor: pointer; white-space: nowrap; transition: all 0.15s;
-}
-.env-auto-btn:hover { background: rgba(var(--accent-rgb,128,128,128),0.2); }
-
-/* ── Noise type selector ── */
-.noise-type-sel { display: flex; gap: 4px; margin-bottom: 10px; }
-.noise-btn {
-  flex: 1; background: var(--panel2); border: 1px solid var(--border);
-  border-radius: 5px; padding: 5px 2px; cursor: pointer;
-  font-size: 0.62em; font-weight: 800; letter-spacing: 0.5px;
-  color: var(--txt2); text-align: center; transition: all 0.15s;
-}
-.noise-btn.active, .noise-btn:hover {
-  background: rgba(var(--accent-rgb,144,96,240),0.15);
-  border-color: var(--accent,#9060f0); color: var(--accent,#9060f0);
+.dist-canvas {
+  display: block; width: 100%; flex: 1; min-height: 80px;
+  border-radius: 2px; background: #030308;
+  border: 1px solid #252545;
 }
 
-/* ── Section headers ── */
-.section-hdr {
-  display: flex; align-items: center; gap: 10px;
-  margin: 12px 0 5px; padding: 0 2px;
-  font-size: 0.62em; font-weight: 900; letter-spacing: 2.5px;
-  text-transform: uppercase; color: rgba(255,255,255,0.18);
+/* ADSR — filter-style 2-column layout */
+.adsr-cols {
+  display: flex; gap: 8px; align-items: stretch;
 }
-.section-hdr::after { content: ''; flex: 1; height: 1px; background: var(--border); }
-.section-step {
-  display: inline-flex; align-items: center; justify-content: center;
-  background: var(--panel2); border: 1px solid var(--border);
-  border-radius: 50%; width: 18px; height: 18px; font-size: 0.95em;
-  flex-shrink: 0; color: rgba(255,255,255,0.3);
+.adsr-left  { flex: 2; min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+.adsr-right {
+  flex: 1; min-width: 70px; max-width: 33%; display: flex; flex-direction: column;
+  background: #0a0a1e; border: 1px solid #141430;
+  border-radius: 3px; padding: 4px;
 }
-.section-hdr.ai-hdr { color: rgba(255,190,30,0.55); }
-.section-hdr.ai-hdr .section-step {
-  color: rgba(255,190,30,0.75); border-color: rgba(255,190,30,0.3);
-  background: rgba(255,190,30,0.06);
+.adsr-canvas {
+  display: block; width: 100%; flex: 1; min-height: 68px;
+  border-radius: 2px; background: #030308;
+  border: 1px solid #252545; margin-bottom: 0;
+  cursor: crosshair;
 }
 
-/* ── AI tool cards ── */
-.ai-card {
-  background: var(--panel); border: 1px solid var(--border);
-  border-radius: 8px; padding: 14px 14px 12px;
-  display: flex; flex-direction: column; gap: 9px;
-  transition: border-color 0.2s;
+/* Patch bar */
+.patch-bar {
+  display: flex; align-items: center; gap: 6px; flex-wrap: nowrap;
+  padding: 8px 10px; margin-bottom: 10px;
+  background: #0f0f28; border: 1px solid #252548; border-radius: 4px;
 }
-.ai-card:hover { border-color: rgba(255,190,30,0.22); }
-.ai-card-title {
-  font-size: 0.67em; font-weight: 900; letter-spacing: 1.5px;
-  color: rgba(255,190,30,0.85); text-transform: uppercase;
+.patch-name-input {
+  background: #18183a; border: 1px solid #2e2e54; border-radius: 3px;
+  color: #ddd; padding: 3px 8px; font-size: 10px; font-family: inherit;
+  width: 130px; flex-shrink: 0;
 }
-.ai-card-desc { font-size: 0.72em; color: var(--txt2); line-height: 1.55; flex: 1; }
-.ai-card-tag {
-  display: inline-block; background: rgba(255,190,30,0.08);
-  border: 1px solid rgba(255,190,30,0.2); border-radius: 3px;
-  padding: 2px 6px; font-size: 0.65em; font-weight: 700;
-  color: rgba(255,190,30,0.6); letter-spacing: 0.5px;
+.patch-name-input:focus { outline: none; border-color: #66ffb2; }
+.patch-select {
+  background: #18183a; color: #ccc; border: 1px solid #2e2e54; border-radius: 3px;
+  padding: 3px 6px; font-size: 10px; min-width: 120px; flex-shrink: 0;
 }
-.ai-card-btn {
-  background: rgba(255,190,30,0.08); border: 1px solid rgba(255,190,30,0.25);
-  border-radius: 5px; padding: 7px 12px; color: rgba(255,190,30,0.9);
-  font-size: 0.72em; font-weight: 800; letter-spacing: 0.5px;
+.patch-btn {
+  padding: 3px 10px; border: 1px solid #2e2e50; border-radius: 3px;
+  background: #18183a; color: #aaa; font-size: 9px; letter-spacing: 0.5px;
+  white-space: nowrap; flex-shrink: 0; transition: all 0.1s;
+}
+.patch-btn:hover { border-color: #66ffb2; color: #66ffb2; }
+.patch-save  { border-color: #66ffb2; color: #66ffb2; }
+.patch-save:hover { background: #66ffb2; color: #050510; }
+.patch-load  { border-color: #a855f7; color: #a855f7; }
+.patch-load:hover { background: #a855f7; color: #050510; }
+.patch-del   { border-color: #444; color: #555; }
+.patch-del:hover { border-color: #ff4444; color: #ff4444; }
+.patch-sep { width: 1px; height: 18px; background: #1e1e40; flex-shrink: 0; }
+
+/* TWE — Temporal Wobble Engine */
+.twe-sec { display: flex; flex-direction: column; gap: 6px; }
+.twe-preset-bar {
+  display: flex; align-items: center; gap: 3px; flex-wrap: wrap;
+  padding: 4px 6px; margin-bottom: 4px;
+  background: #07071c; border: 1px solid #1a1a38; border-radius: 3px;
+}
+.twe-preset-btn {
+  padding: 3px 8px; border: 1px solid #1e1e40; border-radius: 2px;
+  background: #0c0c26; color: #888; font-size: 8px; letter-spacing: 0.5px;
+  white-space: nowrap; flex-shrink: 0; cursor: pointer; transition: all 0.1s;
+}
+.twe-preset-btn:hover { border-color: #66ffb2; color: #66ffb2; }
+.twe-preset-random { border-color: #ff8844; color: #ff8844; }
+.twe-preset-random:hover { background: #ff8844; color: #050510; }
+.twe-preset-ai { border-color: #a855f7; color: #a855f7; }
+.twe-preset-ai:hover { background: #a855f7; color: #050510; }
+.twe-preset-sep { width: 1px; height: 16px; background: #1e1e40; flex-shrink: 0; margin: 0 2px; }
+.twe-preview {
+  display: block; width: 100%; height: 70px;
+  border-radius: 3px; background: #030308;
+  border: 1px solid #111120; margin-bottom: 2px;
+}
+.twe-pat-bar {
+  display: flex; align-items: center; gap: 4px; flex-wrap: nowrap;
+  padding: 4px 0; margin-bottom: 2px;
+}
+.twe-pat-sel { min-width: 100px; max-width: 130px; }
+.twe-header { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; margin-bottom: 2px; }
+.twe-ratemod-btn {
+  padding: 3px 8px; border: 1px solid #1e1e40; border-radius: 3px;
+  background: #0c0c26; color: #555; font-size: 8px; letter-spacing: 0.5px;
+  white-space: nowrap; flex-shrink: 0; cursor: pointer;
+}
+.twe-ratemod-btn.active { background: #66ffb2; color: #050510; border-color: #66ffb2; font-weight: bold; }
+.twe-slot {
+  display: flex; align-items: center; flex-wrap: nowrap; gap: 6px;
+  background: #08081a; border: 1px solid #12122a; border-radius: 3px; padding: 4px 6px;
+}
+.twe-lane-toggle {
+  padding: 1px 4px; border: 1px solid #333355; border-radius: 2px; flex-shrink: 0;
+  background: transparent; color: #555; font-size: 7px; letter-spacing: 1px;
+  cursor: pointer; transition: all 0.15s; margin-left: auto;
+}
+.twe-lane-toggle.active { border-color: var(--accent); color: var(--accent); }
+.twe-lane-toggle:not(.active) { border-color: #ff4466; color: #ff4466; }
+.twe-selected { background: rgba(255,255,255,0.02) !important; }
+.twe-slot-label {
+  font-size: 8px; letter-spacing: 1px; color: #66ffb2; opacity: 0.7;
+  text-transform: uppercase; min-width: 36px; flex-shrink: 0;
+}
+.twe-target-sel {
+  background: #0c0c26; color: #999; border: 1px solid #1e1e40; border-radius: 2px;
+  font-size: 8px; padding: 2px 3px; flex-shrink: 0; max-width: 72px; cursor: pointer;
+}
+.twe-shape-row { display: flex; gap: 2px; flex-shrink: 0; }
+.dist-form-row  { display: flex; gap: 3px; flex-wrap: wrap; margin-bottom: 6px; }
+.twe-shape-row .wave-btn { padding: 2px 5px; font-size: 7.5px; }
+.twe-sync-row { display: flex; align-items: center; gap: 3px; flex-shrink: 0; }
+.twe-sync-btn {
+  padding: 2px 6px; border: 1px solid #1e1e40; border-radius: 2px;
+  background: #0c0c26; color: #555; font-size: 8px; letter-spacing: 0.5px;
+  white-space: nowrap; flex-shrink: 0; cursor: pointer;
+}
+.twe-sync-btn.active { background: #66ffb2; color: #050510; border-color: #66ffb2; font-weight: bold; }
+.twe-div-sel {
+  background: #0c0c26; color: #999; border: 1px solid #1e1e40; border-radius: 2px;
+  font-size: 8px; padding: 2px 3px; max-width: 44px; flex-shrink: 0; cursor: pointer;
+}
+.twe-mod-btn {
+  padding: 2px 5px; border: 1px solid #1e1e40; border-radius: 2px;
+  background: #0c0c26; color: #555; font-size: 8px; font-weight: bold;
+  flex-shrink: 0; cursor: pointer;
+}
+.twe-mod-btn.active { background: #ff8844; color: #050510; border-color: #ff8844; }
+
+/* TWE Redesign — nested main + aux lanes */
+.twe-lanes { display: flex; flex-direction: column; gap: 5px; }
+.twe-main-block, .twe-aux-block {
+  background: #07071c; border: 1px solid #1a1a38; border-radius: 4px; overflow: hidden;
+}
+.twe-block-hdr {
+  display: flex; align-items: center; gap: 6px; padding: 5px 7px;
+  background: #0a0a20; border-bottom: 1px solid #151530; flex-wrap: nowrap;
+}
+.twe-block-lbl { font-size: 8px; letter-spacing: 1px; text-transform: uppercase; opacity: 0.85; flex: 1; }
+.twe-expand-btn {
+  padding: 2px 7px; border: 1px solid #1e1e40; border-radius: 2px;
+  background: #0c0c26; color: #555; font-size: 7.5px; cursor: pointer; white-space: nowrap;
+}
+.twe-expand-btn:hover { color: #aaa; border-color: #2a2a50; }
+.twe-remove-btn {
+  padding: 1px 5px; border: 1px solid #3a1a1a; border-radius: 2px;
+  background: #1a0a0a; color: #664444; font-size: 9px; cursor: pointer;
+}
+.twe-remove-btn:hover { background: #ff3333; color: #fff; border-color: #ff3333; }
+.twe-core-controls { padding: 5px 7px; display: flex; flex-direction: column; gap: 4px; }
+.twe-ctrl-row { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.twe-sub-components { display: flex; flex-direction: column; gap: 0; border-top: 1px solid #111128; }
+.twe-sub-block { border-bottom: 1px solid #0e0e22; }
+.twe-sub-block:last-child { border-bottom: none; }
+.twe-sub-hdr {
+  display: flex; align-items: center; gap: 5px; padding: 4px 10px;
+  background: #090918; cursor: default;
+}
+.twe-sub-lbl { font-size: 7.5px; letter-spacing: 0.8px; color: #888; text-transform: uppercase; flex: 1; }
+.twe-sub-controls { padding: 4px 10px 5px; display: flex; flex-direction: column; gap: 3px; }
+.twe-aux-controls { padding: 5px 7px; display: flex; flex-direction: column; gap: 4px; }
+.twe-add-aux-btn {
+  padding: 5px; border: 1px dashed #1e1e40; border-radius: 3px;
+  background: transparent; color: #444; font-size: 8px; letter-spacing: 0.5px;
   cursor: pointer; transition: all 0.15s; text-align: center;
-  margin-top: auto;
 }
-.ai-card-btn:hover { background: rgba(255,190,30,0.18); border-color: rgba(255,190,30,0.5); }
-.ai-card-btn:active { transform: scale(0.97); }
+.twe-add-aux-btn:hover { border-color: #4455aa; color: #8899cc; }
+/* Draw curve canvas */
+.twe-draw-wrap { padding: 5px 7px; border-top: 1px solid #111128; background: #050510; }
+.twe-draw-canvas { display: block; width: 100%; height: 72px; border-radius: 2px; cursor: crosshair; border: 1px solid #1a1a38; }
+.twe-draw-btns { display: flex; gap: 5px; margin-top: 4px; }
+.twe-draw-presets { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
+.twe-draw-preset-btn { padding: 2px 5px; font-size: 8px; background: #0c0c26; border: 1px solid #1e1e40; color: #888; border-radius: 2px; cursor: pointer; white-space: nowrap; }
+.twe-draw-preset-btn:hover { background: #1a1a3a; color: #bbb; border-color: #3a3a60; }
+.twe-draw-ai-row { display: flex; gap: 4px; margin-top: 4px; }
+.twe-draw-ai-input { flex: 1; background: #08081c; border: 1px solid #2a2a50; color: #ccc; font-size: 9px; padding: 3px 6px; border-radius: 2px; outline: none; }
+.twe-draw-ai-input:focus { border-color: #6644aa; }
+.twe-draw-ai-btn { padding: 3px 8px; background: #1a0a2a; border: 1px solid #6644aa; color: #cc88ff; font-size: 8px; border-radius: 2px; cursor: pointer; white-space: nowrap; }
+.twe-draw-ai-btn:hover { background: #2a1a3a; color: #ee99ff; }
+.twe-draw-apply { padding: 3px 10px; background: #1a3a1a; border: 1px solid #2a5a2a; color: #66ff66; font-size: 8px; border-radius: 2px; cursor: pointer; }
+.twe-draw-apply:hover { background: #2a5a2a; }
+.twe-draw-reset { padding: 3px 8px; background: #2a1010; border: 1px solid #5a2a2a; color: #ff8888; font-size: 8px; border-radius: 2px; cursor: pointer; }
+.twe-draw-reset:hover { background: #3a1818; border-color: #ff4444; }
+.twe-draw-close  { padding: 3px 8px; background: #1a1a2a; border: 1px solid #2a2a40; color: #666; font-size: 9px; border-radius: 2px; cursor: pointer; }
+.twe-draw-close:hover { color: #ff6666; border-color: #ff6666; }
+.twe-shape-row .twe-draw-btn { border-color: #6644aa; color: #9966dd; }
+.twe-shape-row .twe-draw-btn.active { background: #6644aa; color: #fff; border-color: #9966dd; }
 
-/* ── LFO target row ── */
-.lfo-target-row {
-  display: flex; align-items: center; gap: 6px;
-  margin: 4px 0 8px; padding: 5px 8px;
-  background: rgba(160,96,224,0.07); border: 1px solid rgba(160,96,224,0.18);
-  border-radius: 5px;
+/* OSC — filter-style 2-column layout */
+.osc-cols {
+  display: flex; gap: 8px; align-items: flex-start;
 }
-.lfo-target-lbl {
-  font-size: 0.6em; font-weight: 700; color: rgba(255,255,255,0.25);
-  text-transform: uppercase; letter-spacing: 0.5px;
+.osc-left  { flex: 2; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.osc-right {
+  flex: 1.3; min-width: 130px; display: flex; flex-direction: row; align-items: flex-start; gap: 10px;
+  background: #0a0a1e; border: 1px solid #141430;
+  border-radius: 3px; padding: 6px;
 }
-.lfo-target-chip {
-  font-size: 0.65em; font-weight: 800; letter-spacing: 0.5px;
-  color: var(--c-lfo, #a060e0);
-  background: rgba(160,96,224,0.12); border: 1px solid rgba(160,96,224,0.3);
-  border-radius: 4px; padding: 2px 7px;
+.osc-right .osc-wave-preview { width: 62px; height: 90px; flex-shrink: 0; }
+/* Noise strip inside osc-right — two-column layout matching filter/ADSR */
+.osc-noise-strip {
+  flex: 1; min-width: 0;
+  border-left: 1px solid #1a1a38; padding-left: 8px;
 }
-.lfo-target-desc {
-  font-size: 0.6em; font-weight: 600; color: rgba(255,255,255,0.2);
-  margin-left: auto;
+/* Two-column layout inside noise strip */
+.noise-cols {
+  display: flex; gap: 6px; align-items: stretch;
 }
+.noise-left {
+  flex: 2; min-width: 0; display: flex; flex-direction: column; justify-content: space-between; gap: 4px;
+}
+.noise-right {
+  flex: 1; min-width: 52px; display: flex; flex-direction: column;
+  background: #030308; border: 1px solid #111120; border-radius: 2px; padding: 2px;
+}
+.noise-strip-lbl {
+  font-size: 7px; letter-spacing: 1.5px; color: #66ffb2;
+  text-transform: uppercase; flex-shrink: 0;
+}
+.noise-type-row {
+  display: flex; align-items: center; gap: 2px;
+}
+.noise-strip-type-lbl {
+  font-size: 8px; color: #ccc; flex: 1; text-align: center;
+  letter-spacing: 0.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.noise-nav-btn {
+  width: 14px; height: 14px; background: #111128; border: 1px solid #1a1a3a;
+  border-radius: 2px; color: #888; font-size: 9px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0; flex-shrink: 0;
+}
+.noise-nav-btn:hover { border-color: var(--accent); color: var(--accent); }
+.noise-preview {
+  display: block; width: 100%; flex: 1; min-height: 68px;
+  border-radius: 1px; background: transparent; border: none;
+}
+.noise-left .knob-row { justify-content: flex-start; margin: 0; }
 
-/* ── Filter frequency response visualizer ── */
-.filter-viz-wrap {
-  margin: 7px 0 8px; border-radius: 6px; overflow: hidden;
-  border: 1px solid var(--border);
+/* Piano keyboard */
+#piano-section {
+  background: #0a0a1a; border-top: 1px solid #1a1a35;
+  padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 8px;
+  flex-shrink: 0;
 }
-.filter-viz { display: block; width: 100%; height: 88px; cursor: crosshair; }
-
-/* ── Pitch bend wheel ── */
-.kb-with-wheels { display: flex; gap: 10px; align-items: flex-end; }
-.kb-wrap { flex: 1; overflow-x: auto; }
-.pb-area {
-  display: flex; flex-direction: column; align-items: center; gap: 5px;
-  flex-shrink: 0; padding-bottom: 2px;
+.piano-toolbar {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 9px; letter-spacing: 1px; color: #555;
 }
-.pb-wheel {
-  width: 36px; height: 120px;
-  background: linear-gradient(to bottom, #0a0a12, #111118);
-  border: 1px solid var(--border); border-radius: 8px;
-  position: relative; cursor: ns-resize;
-  user-select: none; touch-action: none; overflow: hidden;
+.piano-hint { font-size: 8px; color: #333; letter-spacing: 0.5px; }
+.piano-wrap {
+  position: relative; display: flex; user-select: none;
+  touch-action: none;
 }
-.pb-wheel:hover { border-color: rgba(74,128,255,0.35); }
-.pb-center-mark {
-  position: absolute; left: 0; right: 0; top: 50%; height: 1px;
-  background: rgba(255,255,255,0.1);
+.piano-white {
+  position: relative; width: 36px; height: 90px; flex-shrink: 0;
+  background: #e8e8f8; border: 1px solid #888; border-radius: 0 0 4px 4px;
+  cursor: pointer; transition: background 0.04s;
+  display: flex; align-items: flex-end; justify-content: center; padding-bottom: 5px;
 }
-.pb-track {
-  position: absolute; left: 50%; top: 10px; bottom: 10px;
-  width: 2px; margin-left: -1px;
-  background: rgba(255,255,255,0.05); border-radius: 1px;
+.piano-white.active { background: #00ffb2; border-color: #00ccaa; }
+.piano-white .piano-key-lbl {
+  font-size: 7px; color: #888; pointer-events: none; letter-spacing: 0px;
 }
-.pb-thumb {
-  position: absolute; left: 5px; right: 5px; height: 22px;
-  background: rgba(74,128,255,0.55); border-radius: 4px;
-  top: calc(50% - 11px);
-  box-shadow: 0 0 8px rgba(74,128,255,0.3);
-  transition: background 0.1s;
+.piano-white.active .piano-key-lbl { color: #050510; }
+.piano-black {
+  position: absolute; width: 22px; height: 55px; z-index: 2;
+  background: #1a1a2e; border: 1px solid #000; border-radius: 0 0 3px 3px;
+  cursor: pointer; transition: background 0.04s;
 }
-.pb-wheel:active .pb-thumb { background: var(--a-osc, #4a80ff); }
-.pb-label {
-  font-size: 0.57em; font-weight: 800; color: rgba(255,255,255,0.22);
-  letter-spacing: 1px; text-align: center; line-height: 1.3;
-  text-transform: uppercase;
-}
-.pb-val {
-  font-size: 0.62em; font-weight: 700; color: rgba(74,128,255,0.7);
-  text-align: center; font-variant-numeric: tabular-nums; min-width: 36px;
-}
-.pb-range-btns { display: flex; gap: 2px; }
-.pb-range-btn {
-  background: var(--panel2); border: 1px solid var(--border); border-radius: 3px;
-  padding: 2px 5px; color: var(--txt2); font-size: 0.55em; font-weight: 700;
-  cursor: pointer; white-space: nowrap; transition: all 0.1s;
-}
-.pb-range-btn.active {
-  background: rgba(74,128,255,0.15);
-  border-color: var(--a-osc, #4a80ff); color: var(--a-osc, #4a80ff);
-}
-
-/* ── Preset bar ── */
-.preset-bar {
-  width: 100%;
-  max-width: 1160px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 12px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-.preset-label {
-  font-size: 0.65em; font-weight: 800; letter-spacing: 2px;
-  text-transform: uppercase; color: var(--txt2); white-space: nowrap;
-}
-.preset-divider { width:1px; height:20px; background:var(--border); flex-shrink:0; }
-#preset-name {
-  background: var(--panel2); border: 1px solid var(--border);
-  border-radius: 5px; padding: 5px 10px;
-  color: var(--txt); font-size: 0.78em; width: 150px; outline: none;
-  transition: border-color 0.15s;
-}
-#preset-name:focus { border-color: rgba(74,128,255,0.5); }
-#preset-name::placeholder { color: var(--txt2); }
-#preset-select {
-  flex: 1; background: var(--panel2); border: 1px solid var(--border);
-  border-radius: 5px; padding: 5px 10px;
-  color: var(--txt); font-size: 0.78em; outline: none; cursor: pointer;
-}
-.preset-btn {
-  background: var(--panel2); border: 1px solid var(--border);
-  border-radius: 5px; padding: 5px 14px;
-  color: var(--txt2); font-size: 0.75em; font-weight: 700;
-  cursor: pointer; white-space: nowrap; transition: all 0.15s;
-}
-.preset-btn:hover { border-color: rgba(74,128,255,0.4); color: var(--a-osc); }
-.preset-btn.save { background: rgba(74,128,255,0.1); border-color: rgba(74,128,255,0.3); color: var(--a-osc); }
-.preset-btn.save:hover { background: rgba(74,128,255,0.22); }
-.preset-btn.del:hover { border-color: rgba(255,80,80,0.5); color: #ff7070; }
-
-/* ── Scrollbar ── */
-::-webkit-scrollbar { width: 4px; height:4px; }
-::-webkit-scrollbar-track { background: rgba(255,255,255,0.03); }
-::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius:2px; }
+.piano-black.active { background: #007a55; border-color: #00ffb2; }
 </style>
 </head>
 <body>
+<div id="app">
 
-<!-- Header -->
-<div class="hdr">
-  <div>
-    <span class="logo">WOBBLER<span class="logo-sub">AI-Driven Wobble Bass Synthesizer</span></span>
-  </div>
-  <div class="hdr-right">
-    <div class="hdr-vol">
-      <span class="hdr-vol-lbl">VOL</span>
-      <input type="range" id="volume" min="0" max="100" value="65" step="1">
-      <span class="hdr-vol-val" id="volume-v">65%</span>
+  <!-- HEADER -->
+  <header id="header">
+    <h1>WOBBLER <span>BASS</span></h1>
+    <div id="midi-status">NO MIDI</div>
+    <button id="play-btn">▶ PLAY</button>
+    <div class="bpm-ctrl">
+      <label>BPM</label>
+      <button id="bpm-down" class="bpm-btn">−</button>
+      <input id="bpm-input" type="number" value="120" min="40" max="240">
+      <button id="bpm-up" class="bpm-btn">+</button>
     </div>
-    <button class="ai-btn" id="gen-ai">✦ AI Wobble Pattern</button>
+  </header>
+
+  <!-- 3 VOICE COLUMNS -->
+  <div id="voices">
+    <div class="voice-col" id="voice-1"></div>
+    <div class="voice-col" id="voice-2"></div>
+    <div class="voice-col" id="voice-3"></div>
   </div>
+
+  <!-- MASTER -->
+  <section id="master-section">
+    <div class="sec-hdr">MASTER</div>
+  </section>
+
+  <!-- PIANO KEYBOARD -->
+  <div id="piano-section"></div>
+
 </div>
-
-<!-- Preset bar -->
-<div class="preset-bar">
-  <span class="preset-label">Presets</span>
-  <input type="text" id="preset-name" placeholder="name your patch…" />
-  <button class="preset-btn save" id="preset-save-btn">💾 Save</button>
-  <div class="preset-divider"></div>
-  <select id="preset-select"><option value="">— select preset —</option></select>
-  <button class="preset-btn" id="preset-load-btn">Load</button>
-  <button class="preset-btn del" id="preset-del-btn">✕</button>
-</div>
-
-<div class="synth">
-
-  <!-- ① SOUND SOURCE -->
-  <div class="section-hdr"><span class="section-step">1</span> Sound Source</div>
-  <div class="row-sound">
-
-    <!-- OSC A -->
-    <div class="panel" style="--accent:var(--a-osc); --accent-rgb:74,128,255">
-      <div class="panel-hdr">OSC A <button class="panel-toggle active" id="oscA-toggle" data-param="oscAEnabled" title="Enable OSC A">⏻</button></div>
-      <div class="wave-sel" id="oscAWave-sel" data-param="oscAWave"></div>
-      <div class="params">
-        <div class="p-slot">
-          <div class="p-lbl">OCT</div>
-          <input type="range" id="oscAOctave" min="-2" max="2" value="0" step="1">
-          <div class="p-val" id="oscAOctave-v">0</div>
-        </div>
-        <div class="p-slot">
-          <div class="p-lbl">SEM</div>
-          <input type="range" id="oscADetune" min="-12" max="12" value="0" step="1">
-          <div class="p-val" id="oscADetune-v">0</div>
-        </div>
-        <div class="p-slot">
-          <div class="p-lbl">LEVEL</div>
-          <input type="range" id="oscALevel" min="0" max="100" value="100" step="1">
-          <div class="p-val" id="oscALevel-v">100%</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- OSC B -->
-    <div class="panel" style="--accent:var(--b-osc); --accent-rgb:56,184,112">
-      <div class="panel-hdr">OSC B <button class="panel-toggle active" id="oscB-toggle" data-param="oscBEnabled" title="Enable OSC B">⏻</button></div>
-      <div class="wave-sel" id="oscBWave-sel" data-param="oscBWave"></div>
-      <div class="params">
-        <div class="p-slot">
-          <div class="p-lbl">OCT</div>
-          <input type="range" id="oscBOctave" min="-2" max="2" value="-1" step="1">
-          <div class="p-val" id="oscBOctave-v">-1</div>
-        </div>
-        <div class="p-slot">
-          <div class="p-lbl">SEM</div>
-          <input type="range" id="oscBDetune" min="-12" max="12" value="0" step="1">
-          <div class="p-val" id="oscBDetune-v">0</div>
-        </div>
-        <div class="p-slot">
-          <div class="p-lbl">MIX</div>
-          <input type="range" id="oscBLevel" min="0" max="100" value="50" step="1">
-          <div class="p-val" id="oscBLevel-v">50%</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- NOISE -->
-    <div class="panel" style="--accent:#9060f0; --accent-rgb:144,96,240">
-      <div class="panel-hdr">NOISE <button class="panel-toggle" id="noise-toggle" data-param="noiseEnabled" title="Enable Noise">⏻</button></div>
-      <div class="noise-type-sel">
-        <button class="noise-btn active" data-type="white">WHITE</button>
-        <button class="noise-btn" data-type="pink">PINK</button>
-        <button class="noise-btn" data-type="brown">BROWN</button>
-        <button class="noise-btn" data-type="crackle">CRKL</button>
-      </div>
-      <div class="params">
-        <div class="p-slot">
-          <div class="p-lbl">LEVEL</div>
-          <input type="range" id="noiseLevel" min="0" max="100" value="0" step="1">
-          <div class="p-val" id="noiseLevel-v">0%</div>
-        </div>
-      </div>
-      <div style="margin-top:6px;font-size:0.68em;color:#444;line-height:1.7">
-        <span style="color:#6030a0">WHITE</span> full spectrum &nbsp;·&nbsp;
-        <span style="color:#6030a0">PINK</span> warm 1/f<br>
-        <span style="color:#6030a0">BROWN</span> low rumble &nbsp;·&nbsp;
-        <span style="color:#6030a0">CRKL</span> vinyl
-      </div>
-    </div>
-
-  </div><!-- /row-sound -->
-
-  <!-- ② SHAPE & FILTER -->
-  <div class="section-hdr"><span class="section-step">2</span> Shape &amp; Filter</div>
-  <div class="row-filter">
-
-    <!-- FILTER -->
-    <div class="panel" style="--accent:var(--c-filter); --accent-rgb:255,120,60">
-      <div class="panel-hdr">FILTER <button class="panel-toggle active" id="filter-toggle" data-param="filterEnabled" title="Enable Filter">⏻</button></div>
-      <div class="ftype-sel" id="filterType-sel"></div>
-      <div class="filter-viz-wrap">
-        <canvas id="filter-viz" class="filter-viz"></canvas>
-      </div>
-      <div class="params">
-        <div class="p-slot">
-          <div class="p-lbl">CUTOFF</div>
-          <input type="range" id="cutoff" min="20" max="18000" value="800" step="10">
-          <div class="p-val" id="cutoff-v">800 Hz</div>
-        </div>
-        <div class="p-slot">
-          <div class="p-lbl">RES</div>
-          <input type="range" id="resonance" min="0" max="28" value="5" step="0.5">
-          <div class="p-val" id="resonance-v">5.0</div>
-        </div>
-        <div class="p-slot">
-          <div class="p-lbl">DRIVE</div>
-          <input type="range" id="drive" min="0" max="100" value="20" step="1">
-          <div class="p-val" id="drive-v">20%</div>
-        </div>
-      </div>
-    </div>
-
-
-  </div><!-- /row-filter -->
-
-  <!-- Envelopes (still part of ② SHAPE) -->
-  <div class="row2">
-
-    <!-- AMP ENVELOPE -->
-    <div class="panel" style="--accent:var(--c-amp); --accent-rgb:34,184,160">
-      <div class="panel-hdr">AMP ENV
-        <span style="font-size:0.6em;font-weight:400;color:#555;margin-left:4px">drag nodes · ◉ bend curves</span>
-      </div>
-      <div class="env-mode-row">
-        <div class="env-mode-btns">
-          <button class="env-mode-btn active" data-canvas="amp" data-mode="smooth">SMOOTH</button>
-          <button class="env-mode-btn" data-canvas="amp" data-mode="steps">STEPS</button>
-          <button class="env-mode-btn" data-canvas="amp" data-mode="bounce">BOUNCE</button>
-        </div>
-        <button class="env-auto-btn" data-canvas="amp">⚡ AUTO</button>
-      </div>
-      <div class="env-canvas-wrap">
-        <canvas class="env-canvas" id="amp-env-canvas"></canvas>
-        <span class="env-canvas-hint">A · D · S · R</span>
-      </div>
-      <div class="params">
-        <div class="p-slot">
-          <div class="p-lbl">ATK</div>
-          <input type="range" id="ampAttack" min="1" max="2000" value="5" step="1">
-          <div class="p-val" id="ampAttack-v">5 ms</div>
-        </div>
-        <div class="p-slot">
-          <div class="p-lbl">DEC</div>
-          <input type="range" id="ampDecay" min="5" max="3000" value="100" step="5">
-          <div class="p-val" id="ampDecay-v">100 ms</div>
-        </div>
-        <div class="p-slot">
-          <div class="p-lbl">SUS</div>
-          <input type="range" id="ampSustain" min="0" max="100" value="70" step="1">
-          <div class="p-val" id="ampSustain-v">70%</div>
-        </div>
-        <div class="p-slot">
-          <div class="p-lbl">REL</div>
-          <input type="range" id="ampRelease" min="10" max="4000" value="250" step="10">
-          <div class="p-val" id="ampRelease-v">250 ms</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- FILTER ENVELOPE -->
-    <div class="panel" style="--accent:var(--c-fenv); --accent-rgb:224,144,32">
-      <div class="panel-hdr">FILTER ENV
-        <span style="font-size:0.6em;font-weight:400;color:#555;margin-left:4px">main wobble source</span>
-      </div>
-      <div class="env-mode-row">
-        <div class="env-mode-btns">
-          <button class="env-mode-btn active" data-canvas="fenv" data-mode="smooth">SMOOTH</button>
-          <button class="env-mode-btn" data-canvas="fenv" data-mode="steps">STEPS</button>
-          <button class="env-mode-btn" data-canvas="fenv" data-mode="bounce">BOUNCE</button>
-        </div>
-        <button class="env-auto-btn" data-canvas="fenv">⚡ AUTO</button>
-      </div>
-      <div class="env-canvas-wrap">
-        <canvas class="env-canvas" id="fenv-canvas"></canvas>
-        <span class="env-canvas-hint">A · D · S · R</span>
-      </div>
-      <div class="params">
-        <div class="p-slot">
-          <div class="p-lbl">ATK</div>
-          <input type="range" id="fEnvAttack" min="1" max="2000" value="5" step="1">
-          <div class="p-val" id="fEnvAttack-v">5 ms</div>
-        </div>
-        <div class="p-slot">
-          <div class="p-lbl">DEC</div>
-          <input type="range" id="fEnvDecay" min="5" max="3000" value="300" step="5">
-          <div class="p-val" id="fEnvDecay-v">300 ms</div>
-        </div>
-        <div class="p-slot">
-          <div class="p-lbl">SUS</div>
-          <input type="range" id="fEnvSustain" min="0" max="100" value="10" step="1">
-          <div class="p-val" id="fEnvSustain-v">10%</div>
-        </div>
-        <div class="p-slot">
-          <div class="p-lbl">REL</div>
-          <input type="range" id="fEnvRelease" min="10" max="4000" value="200" step="10">
-          <div class="p-val" id="fEnvRelease-v">200 ms</div>
-        </div>
-        <div class="p-slot bipolar">
-          <div class="p-lbl">AMOUNT</div>
-          <input type="range" id="fEnvAmount" min="-10000" max="10000" value="3000" step="50">
-          <div class="p-val" id="fEnvAmount-v">+3000 Hz</div>
-        </div>
-        <div class="p-slot">
-          <div class="p-lbl">VAR</div>
-          <input type="range" id="fEnvVariation" min="0" max="100" value="0" step="1">
-          <div class="p-val" id="fEnvVariation-v">0%</div>
-        </div>
-      </div>
-    </div>
-
-  </div><!-- /row2 -->
-
-  <!-- ③ MODULATE -->
-  <div class="section-hdr"><span class="section-step">3</span> Modulate</div>
-  <div class="row-mod">
-
-    <!-- PITCH ENVELOPE -->
-    <div class="panel" style="--accent:#c040c0; --accent-rgb:192,64,192">
-      <div class="panel-hdr">PITCH ENV
-        <span style="font-size:0.65em;font-weight:400;color:#555;margin-left:4px">negative = pitch drop, positive = upward glide</span>
-      </div>
-      <div class="env-viz-wrap">
-        <svg viewBox="0 0 120 36" preserveAspectRatio="none">
-          <path id="penv-path" d="M0,18 L4,18 L16,2 L40,18" stroke="#c040c0" stroke-width="1.5" fill="rgba(192,64,192,0.08)"/>
-        </svg>
-      </div>
-      <div class="params">
-        <div class="p-slot">
-          <div class="p-lbl">AMOUNT</div>
-          <input type="range" id="pitchEnvAmount" min="-24" max="24" value="0" step="0.5">
-          <div class="p-val" id="pitchEnvAmount-v">0 st</div>
-        </div>
-        <div class="p-slot">
-          <div class="p-lbl">ATK</div>
-          <input type="range" id="pitchEnvAttack" min="0" max="500" value="2" step="1">
-          <div class="p-val" id="pitchEnvAttack-v">2 ms</div>
-        </div>
-        <div class="p-slot">
-          <div class="p-lbl">DEC</div>
-          <input type="range" id="pitchEnvDecay" min="5" max="2000" value="150" step="5">
-          <div class="p-val" id="pitchEnvDecay-v">150 ms</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- LFO 1 -->
-    <div class="panel" style="--accent:var(--c-lfo); --accent-rgb:160,96,224">
-      <div class="panel-hdr">
-        LFO 1 <span class="lfo-active-chip" id="lfo1-chip">CUTOFF</span>
-        <button class="panel-toggle active" id="lfo-toggle" data-param="lfoEnabled" title="Enable LFO 1">⏻</button>
-      </div>
-      <div class="lfo-target-sel">
-        <button class="lfo-target-btn active" data-lfo="lfoTarget" data-target="cutoff"   title="Filter cutoff freq">CUTOFF</button>
-        <button class="lfo-target-btn"        data-lfo="lfoTarget" data-target="pitch"    title="OSC A+B detune (vibrato)">TUNE A+B</button>
-        <button class="lfo-target-btn"        data-lfo="lfoTarget" data-target="amp"      title="Master volume (tremolo)">VOL</button>
-        <button class="lfo-target-btn"        data-lfo="lfoTarget" data-target="res"      title="Filter resonance Q">RES</button>
-        <button class="lfo-target-btn"        data-lfo="lfoTarget" data-target="noise"    title="Noise level">NOISE</button>
-        <button class="lfo-target-btn"        data-lfo="lfoTarget" data-target="oscAlevel" title="OSC A level only">OSC A</button>
-        <button class="lfo-target-btn"        data-lfo="lfoTarget" data-target="oscBlevel" title="OSC B level only">OSC B</button>
-        <button class="lfo-target-btn"        data-lfo="lfoTarget" data-target="lfo2rate"  title="Modulate LFO 2 rate → speed variation">LFO2 RATE</button>
-      </div>
-      <div class="lfo-target-desc" id="lfo1-desc">Filter cutoff frequency → wobble</div>
-      <div class="lfo-mult-row">
-        <span class="lfo-mult-lbl">CYCLES</span>
-        <button class="lfo-mult-btn active" data-lfo="1" data-mult="1">×1</button>
-        <button class="lfo-mult-btn"        data-lfo="1" data-mult="2">×2</button>
-        <button class="lfo-mult-btn"        data-lfo="1" data-mult="4">×4</button>
-        <button class="lfo-mult-btn"        data-lfo="1" data-mult="8">×8</button>
-      </div>
-      <div class="lfo-curve-wrap">
-        <canvas id="lfo1-curve" class="lfo-curve"></canvas>
-      </div>
-      <div class="lfo-preset-row">
-        <button class="lfo-preset-btn" data-lfo="1" data-preset="sine">SIN</button>
-        <button class="lfo-preset-btn" data-lfo="1" data-preset="triangle">TRI</button>
-        <button class="lfo-preset-btn" data-lfo="1" data-preset="saw">SAW</button>
-        <button class="lfo-preset-btn" data-lfo="1" data-preset="ramp">RMP</button>
-        <button class="lfo-preset-btn" data-lfo="1" data-preset="square">SQ</button>
-        <button class="lfo-preset-btn" data-lfo="1" data-preset="bounce">BNCE</button>
-        <button class="lfo-preset-btn" data-lfo="1" data-preset="sah">S&amp;H</button>
-      </div>
-      <div class="params">
-        <div class="p-slot">
-          <div class="p-lbl">RATE</div>
-          <input type="range" id="lfoRate" min="0.05" max="30" value="4" step="0.05">
-          <div class="p-val" id="lfoRate-v">4.0 Hz</div>
-        </div>
-        <div class="p-slot">
-          <div class="p-lbl">DEPTH</div>
-          <input type="range" id="lfoDepth" min="0" max="5000" value="400" step="10">
-          <div class="p-val" id="lfoDepth-v">400 Hz</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- LFO 2 -->
-    <div class="panel" style="--accent:#60a0e0; --accent-rgb:96,160,224">
-      <div class="panel-hdr">
-        LFO 2 <span class="lfo-active-chip" id="lfo2-chip">TUNE A+B</span>
-        <button class="panel-toggle" id="lfo2-toggle" data-param="lfo2Enabled" title="Enable LFO 2">⏻</button>
-      </div>
-      <div class="lfo-target-sel">
-        <button class="lfo-target-btn"        data-lfo="lfo2Target" data-target="cutoff"    title="Filter cutoff freq">CUTOFF</button>
-        <button class="lfo-target-btn active" data-lfo="lfo2Target" data-target="pitch"     title="OSC A+B detune (vibrato)">TUNE A+B</button>
-        <button class="lfo-target-btn"        data-lfo="lfo2Target" data-target="amp"       title="Master volume (tremolo)">VOL</button>
-        <button class="lfo-target-btn"        data-lfo="lfo2Target" data-target="res"       title="Filter resonance Q">RES</button>
-        <button class="lfo-target-btn"        data-lfo="lfo2Target" data-target="noise"     title="Noise level">NOISE</button>
-        <button class="lfo-target-btn"        data-lfo="lfo2Target" data-target="oscAlevel" title="OSC A level only">OSC A</button>
-        <button class="lfo-target-btn"        data-lfo="lfo2Target" data-target="oscBlevel" title="OSC B level only">OSC B</button>
-        <button class="lfo-target-btn"        data-lfo="lfo2Target" data-target="lfo1rate"  title="Modulate LFO 1 rate → speed variation">LFO1 RATE</button>
-      </div>
-      <div class="lfo-target-desc" id="lfo2-desc">OSC A + B detune → vibrato (both oscillators)</div>
-      <div class="lfo-mult-row">
-        <span class="lfo-mult-lbl">CYCLES</span>
-        <button class="lfo-mult-btn active" data-lfo="2" data-mult="1">×1</button>
-        <button class="lfo-mult-btn"        data-lfo="2" data-mult="2">×2</button>
-        <button class="lfo-mult-btn"        data-lfo="2" data-mult="4">×4</button>
-        <button class="lfo-mult-btn"        data-lfo="2" data-mult="8">×8</button>
-      </div>
-      <div class="lfo-curve-wrap">
-        <canvas id="lfo2-curve" class="lfo-curve"></canvas>
-      </div>
-      <div class="lfo-preset-row">
-        <button class="lfo-preset-btn" data-lfo="2" data-preset="sine">SIN</button>
-        <button class="lfo-preset-btn" data-lfo="2" data-preset="triangle">TRI</button>
-        <button class="lfo-preset-btn" data-lfo="2" data-preset="saw">SAW</button>
-        <button class="lfo-preset-btn" data-lfo="2" data-preset="ramp">RMP</button>
-        <button class="lfo-preset-btn" data-lfo="2" data-preset="square">SQ</button>
-        <button class="lfo-preset-btn" data-lfo="2" data-preset="bounce">BNCE</button>
-        <button class="lfo-preset-btn" data-lfo="2" data-preset="sah">S&amp;H</button>
-      </div>
-      <div class="params">
-        <div class="p-slot">
-          <div class="p-lbl">RATE</div>
-          <input type="range" id="lfo2Rate" min="0.05" max="30" value="0.5" step="0.05">
-          <div class="p-val" id="lfo2Rate-v">0.50 Hz</div>
-        </div>
-        <div class="p-slot">
-          <div class="p-lbl">DEPTH</div>
-          <input type="range" id="lfo2Depth" min="0" max="5000" value="50" step="5">
-          <div class="p-val" id="lfo2Depth-v">50 Hz</div>
-        </div>
-      </div>
-    </div>
-
-  </div><!-- /row-mod -->
-
-  <!-- ✦ AI GENERATE -->
-  <div class="section-hdr ai-hdr"><span class="section-step">✦</span> AI Generate</div>
-  <div class="row-ai">
-
-    <div class="ai-card">
-      <div class="ai-card-title">Wobble Pattern</div>
-      <div class="ai-card-desc">Generates a complete wobble bass patch — LFO rate, filter envelope, pitch drop — in one click.</div>
-      <span class="ai-card-tag">LFO · FILTER ENV · PITCH</span>
-      <button class="ai-card-btn" id="ai-wobble-btn">✨ Generate Wobble</button>
-    </div>
-
-    <div class="ai-card">
-      <div class="ai-card-title">Filter Sweep</div>
-      <div class="ai-card-desc">Creates an expressive filter frequency sweep — sets cutoff, resonance, and filter env curve shape (steps, bounce, or smooth).</div>
-      <span class="ai-card-tag">CUTOFF · RES · FILTER ENV</span>
-      <button class="ai-card-btn" id="ai-filter-btn">✨ Generate Sweep</button>
-    </div>
-
-    <div class="ai-card">
-      <div class="ai-card-title">Envelope Curves</div>
-      <div class="ai-card-desc">Randomises both AMP and FILTER envelope shapes — picks a random mode (smooth, steps, or bounce) and generates the curve.</div>
-      <span class="ai-card-tag">AMP ENV · FILTER ENV</span>
-      <button class="ai-card-btn" id="ai-env-btn">✨ Generate Curves</button>
-    </div>
-
-    <div class="ai-card">
-      <div class="ai-card-title">Sound Layer</div>
-      <div class="ai-card-desc">Randomises oscillator waveforms, detune, mix levels, and noise type to create a new layered texture as a starting point.</div>
-      <span class="ai-card-tag">OSC A · OSC B · NOISE</span>
-      <button class="ai-card-btn" id="ai-layer-btn">✨ Generate Layer</button>
-    </div>
-
-  </div><!-- /row-ai -->
-
-  <!-- Keyboard -->
-  <div class="kb-section">
-    <div class="kb-hdr">
-      <button class="oct-btn" id="oct-down">◄ Octave</button>
-      <span>Keyboard: <strong id="oct-display">C2–B2</strong> &nbsp;·&nbsp; <code style="color:#a060e0">Z/X</code> shift &nbsp;·&nbsp; <code style="color:#a060e0">A–K</code> white &nbsp;<code style="color:#a060e0">W E R T Y U</code> black</span>
-      <button class="oct-btn" id="oct-up">Octave ►</button>
-    </div>
-    <div class="kb-with-wheels">
-
-      <!-- Pitch bend wheel -->
-      <div class="pb-area">
-        <div class="pb-wheel" id="pb-wheel">
-          <div class="pb-center-mark"></div>
-          <div class="pb-track"></div>
-          <div class="pb-thumb" id="pb-thumb"></div>
-        </div>
-        <div class="pb-label">PITCH<br>BEND</div>
-        <div class="pb-val" id="pb-val">0¢</div>
-        <div class="pb-range-btns">
-          <button class="pb-range-btn active" data-range="2">±2</button>
-          <button class="pb-range-btn" data-range="7">±7</button>
-          <button class="pb-range-btn" data-range="12">±12</button>
-        </div>
-      </div>
-
-      <div class="kb-wrap">
-        <div class="piano" id="piano"></div>
-        <div class="oct-lbl-row" id="oct-lbl-row"></div>
-      </div>
-
-    </div>
-  </div>
-
-</div><!-- /synth -->
-
 <script src="synth.js"></script>
+<script src="piano.js"></script>
 </body>
 </html>

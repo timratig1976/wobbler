@@ -3,10 +3,11 @@
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
 
+// Minimal placeholder editor — full 3-voice UI to be built in a subsequent task
 class WobblerAudioProcessorEditor : public juce::AudioProcessorEditor
 {
 public:
-    WobblerAudioProcessorEditor(WobblerAudioProcessor&);
+    explicit WobblerAudioProcessorEditor(WobblerAudioProcessor&);
     ~WobblerAudioProcessorEditor() override;
 
     void paint(juce::Graphics&) override;
@@ -14,38 +15,15 @@ public:
 
 private:
     WobblerAudioProcessor& audioProcessor;
-    
-    juce::Slider cutoffSlider;
-    juce::Slider resonanceSlider;
-    juce::Slider distortionSlider;
-    juce::Slider attackSlider;
-    juce::Slider decaySlider;
-    juce::Slider sustainSlider;
-    juce::Slider releaseSlider;
-    juce::Slider lfoRateSlider;
-    juce::Slider lfoDepthSlider;
-    
-    juce::Label cutoffLabel;
-    juce::Label resonanceLabel;
-    juce::Label distortionLabel;
-    juce::Label attackLabel;
-    juce::Label decayLabel;
-    juce::Label sustainLabel;
-    juce::Label releaseLabel;
-    juce::Label lfoRateLabel;
-    juce::Label lfoDepthLabel;
-    
-    juce::TextButton generateButton;
-    
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> cutoffAttachment;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> resonanceAttachment;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> distortionAttachment;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attackAttachment;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> decayAttachment;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> sustainAttachment;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> releaseAttachment;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoRateAttachment;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoDepthAttachment;
+
+    // Global knobs wired to APVTS
+    juce::Slider masterVolSlider;
+    juce::Slider bpmSlider;
+    juce::Label  masterVolLabel;
+    juce::Label  bpmLabel;
+
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> masterVolAtt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> bpmAtt;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(WobblerAudioProcessorEditor)
 };
