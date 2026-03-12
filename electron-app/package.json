@@ -1,0 +1,36 @@
+{
+  "name": "wobbler",
+  "version": "1.0.0",
+  "description": "Wobbler Bass Synthesizer — standalone macOS app",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --mac",
+    "dist": "electron-builder --mac --publish never"
+  },
+  "devDependencies": {
+    "electron": "^35.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.wobbler.synth",
+    "productName": "Wobbler",
+    "mac": {
+      "category": "public.app-category.music",
+      "target": [
+        { "target": "dmg", "arch": ["arm64", "x64"] }
+      ]
+    },
+    "files": [
+      "main.js",
+      "preload.js"
+    ],
+    "extraResources": [
+      {
+        "from": "../web-prototype",
+        "to": "web-prototype",
+        "filter": ["**/*"]
+      }
+    ]
+  }
+}
