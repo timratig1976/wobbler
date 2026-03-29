@@ -106,7 +106,7 @@ function applyPatchToAudio(patch, synth, seq, bpmSet) {
       if (!('attack'   in a)) a.attack   = 0;
       if (!('startBar' in a)) a.startBar = 0;
     });
-    (vp.lfos || []).forEach((lp, i) => { if (lp._enabled === undefined) lp._enabled = i < 2; });
+    (vp.lfos || []).forEach((lp, i) => { if (lp._enabled === undefined) lp._enabled = false; });
     if (vp.noise.filterMix === undefined) vp.noise.filterMix = 1;
     if (vp.twe.tweAmt      === undefined) vp.twe.tweAmt      = 1;
     if (!vp.eq) vp.eq = { lowGain:0, midGain:0, highGain:0, lowFreq:200, midFreq:1000, highFreq:6000 };
@@ -116,12 +116,23 @@ function applyPatchToAudio(patch, synth, seq, bpmSet) {
     if (vp.fx.bypassed      === undefined) vp.fx.bypassed      = false;
     if (!vp.dist) vp.dist = { form:'soft', drive:0, tone:18000, mix:0, volume:1 };
     if (vp.dist.bypassed    === undefined) vp.dist.bypassed    = false;
-    if (!vp.twe._bypassed)  vp.twe._bypassed = false;
+    if (vp.twe._bypassed === undefined) vp.twe._bypassed = true;
     if (vp.osc.unison       === undefined) vp.osc.unison       = 1;
     if (vp.osc.unisonDetune === undefined) vp.osc.unisonDetune = 20;
     if (vp.osc.unisonBlend  === undefined) vp.osc.unisonBlend  = 1;
     vp.lfos.forEach(lp => { if (lp.envA === undefined) lp.envA = 0; if (lp.envR === undefined) lp.envR = 0; });
-    
+    // Migration: new engine fields
+    if (vp.osc1Active  === undefined) vp.osc1Active  = true;
+    if (vp.osc2Active  === undefined) vp.osc2Active  = false;
+    if (vp.subActive   === undefined) vp.subActive   = false;
+    if (!vp.osc2) vp.osc2 = { waveform:'sine', oct:0, semi:0, detune:7, cents:0, volume:0.5, unison:1, unisonDetune:10 };
+    if (!vp.sub)  vp.sub  = { waveform:'sine', oct:-2, cents:0, volume:0.6 };
+    if (vp.osc1ModTarget === undefined) vp.osc1ModTarget = 'none';
+    if (vp.osc1ModDepth  === undefined) vp.osc1ModDepth  = 0.5;
+    if (vp.osc2ModTarget === undefined) vp.osc2ModTarget = 'none';
+    if (vp.osc2ModDepth  === undefined) vp.osc2ModDepth  = 0.5;
+    if (vp.osc1LfoPitch  === undefined) vp.osc1LfoPitch  = false;
+
     Object.assign(v.p, JSON.parse(JSON.stringify(vp)));
     if (patch.voicesEnabled) {
       v._enabled = patch.voicesEnabled[i] !== false;

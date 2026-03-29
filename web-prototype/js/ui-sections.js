@@ -224,25 +224,52 @@ function buildDistSection(container, dp, voice, color) {
   );
 }
 
-// Interactive ADSR canvas (Serum-style)
+// Interactive ADSR canvas (Serum-style: canvas top, readouts, knobs below)
 function buildADSRSection(container, adsrP, voice, color) {
-  const SUSTAIN_W = 0.35; // fraction of canvas width reserved for sustain display
+  const SUSTAIN_W = 0.3;
 
-  // Two-column layout: knobs left, canvas right
-  const adsrCols = document.createElement('div'); adsrCols.className = 'adsr-cols';
-  container.appendChild(adsrCols);
+  // Ensure hold exists
+  if (adsrP.hold === undefined) adsrP.hold = 0;
 
-  const adsrLeft  = document.createElement('div'); adsrLeft.className  = 'adsr-left';
-  const adsrRight = document.createElement('div'); adsrRight.className = 'adsr-right';
-  adsrCols.append(adsrLeft, adsrRight);
+  // ── Canvas ─────────────────────────────────────────────
+  const cvs = document.createElement('canvas');
+  cvs.style.cssText = 'display:block;width:100%;height:100px;background:#030308;border-radius:4px;border:1px solid #1a1a30;cursor:crosshair;touch-action:none;margin-bottom:0';
+  container.appendChild(cvs);
 
-  // Canvas goes in right column
-  const cvs = document.createElement('canvas'); cvs.className = 'adsr-canvas';
-  adsrRight.appendChild(cvs);
+  // ── Value readout row ──────────────────────────────────
+  const readoutRow = document.createElement('div');
+  readoutRow.style.cssText = 'display:flex;background:#080814;border:1px solid #1a1a30;border-top:none;border-radius:0 0 4px 4px;margin-bottom:8px;overflow:hidden';
+  container.appendChild(readoutRow);
 
-  // Knob row goes in left column
+  const readouts = {};
+  function fmtTime(v) { return v < 1 ? (v*1000).toFixed(0)+' ms' : v.toFixed(2)+' s'; }
+  function fmtSus(v)  { return (v * 100).toFixed(0)+' %'; }
+  [['atk','ATK'],['hld','HLD'],['dec','DEC'],['sus','SUS'],['rel','REL']].forEach(([k,lbl]) => {
+    const cell = document.createElement('div');
+    cell.style.cssText = 'flex:1;display:flex;flex-direction:column;align-items:center;padding:3px 0;border-right:1px solid #111128;cursor:ns-resize;user-select:none';
+    const v = document.createElement('div');
+    v.style.cssText = `font-size:10px;color:${color};font-family:monospace;letter-spacing:1px`;
+    const l = document.createElement('div');
+    l.style.cssText = 'font-size:9px;color:#444;letter-spacing:1px';
+    l.textContent = lbl;
+    cell.append(v, l);
+    readoutRow.appendChild(cell);
+    readouts[k] = { el: v, fmt: k==='sus' ? fmtSus : fmtTime };
+  });
+  readoutRow.lastChild.style.borderRight = 'none';
+
+  function updateReadouts() {
+    readouts.atk.el.textContent = fmtTime(adsrP.attack);
+    readouts.hld.el.textContent = fmtTime(adsrP.hold || 0);
+    readouts.dec.el.textContent = fmtTime(adsrP.decay);
+    readouts.sus.el.textContent = fmtSus(adsrP.sustain);
+    readouts.rel.el.textContent = fmtTime(adsrP.release);
+  }
+
+  // ── Knob row ───────────────────────────────────────────
   const knobRow = document.createElement('div'); knobRow.className = 'knob-row';
-  adsrLeft.appendChild(knobRow);
+  knobRow.style.cssText = 'justify-content:space-between;gap:4px';
+  container.appendChild(knobRow);
 
   let knobRefs = {};
 
@@ -418,7 +445,7 @@ function buildADSRSection(container, adsrP, voice, color) {
       const v = Math.max(-1, Math.min(1, drag.startRelC - dy / 40));
       adsrP.relCurve = v;
     }
-    redraw();
+    redraw(); updateReadouts();
   }
 
   function onUp() { drag = null; }
@@ -431,13 +458,16 @@ function buildADSRSection(container, adsrP, voice, color) {
   window.addEventListener('touchend',   onUp);
 
   // ── Knobs ──────────────────────────────────────────────
-  knobRefs.atk = makeKnob({ parent:knobRow, min:0.001, max:2,  value:adsrP.attack,  label:'ATK', unit:'s', decimals:3, color, onChange: v => { adsrP.attack  = v; voice.set('adsr','attack', v);  redraw(); } });
-  knobRefs.dec = makeKnob({ parent:knobRow, min:0.01,  max:2,  value:adsrP.decay,   label:'DEC', unit:'s', decimals:2, color, onChange: v => { adsrP.decay   = v; voice.set('adsr','decay',  v);  redraw(); } });
-  knobRefs.sus = makeKnob({ parent:knobRow, min:0,     max:1,  value:adsrP.sustain, label:'SUS',           decimals:2, color, onChange: v => { adsrP.sustain = v; voice.set('adsr','sustain',v);  redraw(); } });
-  knobRefs.rel = makeKnob({ parent:knobRow, min:0.01,  max:4,  value:adsrP.release, label:'REL', unit:'s', decimals:2, color, onChange: v => { adsrP.release = v; voice.set('adsr','release',v);  redraw(); } });
+  knobRefs.atk = makeKnob({ parent:knobRow, min:0.001, max:2,  value:adsrP.attack,     label:'ATK', unit:'s', decimals:3, color, onChange: v => { adsrP.attack  = v; voice.set('adsr','attack',  v); redrawAll(); } });
+  knobRefs.hld = makeKnob({ parent:knobRow, min:0,     max:2,  value:adsrP.hold||0,    label:'HLD', unit:'s', decimals:3, color, onChange: v => { adsrP.hold    = v;                               redrawAll(); } });
+  knobRefs.dec = makeKnob({ parent:knobRow, min:0.01,  max:2,  value:adsrP.decay,      label:'DEC', unit:'s', decimals:2, color, onChange: v => { adsrP.decay   = v; voice.set('adsr','decay',   v); redrawAll(); } });
+  knobRefs.sus = makeKnob({ parent:knobRow, min:0,     max:1,  value:adsrP.sustain,    label:'SUS',           decimals:2, color, onChange: v => { adsrP.sustain = v; voice.set('adsr','sustain', v); redrawAll(); } });
+  knobRefs.rel = makeKnob({ parent:knobRow, min:0.01,  max:4,  value:adsrP.release,    label:'REL', unit:'s', decimals:2, color, onChange: v => { adsrP.release = v; voice.set('adsr','release', v); redrawAll(); } });
 
-  setTimeout(() => redraw(), 30);
-  return { redraw };
+  function redrawAll() { redraw(); updateReadouts(); }
+
+  setTimeout(() => redrawAll(), 30);
+  return { redraw: redrawAll };
 }
 
 // LFO Panel (complex 2-row layout with all controls)

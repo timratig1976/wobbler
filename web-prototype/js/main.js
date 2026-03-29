@@ -3,13 +3,17 @@ document.addEventListener('DOMContentLoaded', () => {
   const seq   = new Sequencer(synth);
   const bpmGet = () => seq.bpm;
 
+  const OSC_MODES = ['osc1', 'osc2', 'sub'];
+
   function buildAllVoices() {
+    const centerPanel = document.getElementById('center-panel');
+    if (centerPanel) centerPanel.innerHTML = '';
     synth.voices.forEach((v,i) => {
       const col = document.getElementById(`voice-${i+1}`);
       if (!col) return;
       col.innerHTML = '';
       col.style.setProperty('--accent', VOICE_COLORS[i]);
-      buildVoicePanel(col, v, VOICE_COLORS[i], bpmGet);
+      buildVoicePanel(col, v, VOICE_COLORS[i], bpmGet, OSC_MODES[i], centerPanel || col);
     });
   }
 
@@ -76,6 +80,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Web MIDI
   setupMIDI(synth);
+
+  // AI Bar
+  if (typeof initAIBar === 'function') initAIBar(synth, seq);
 
   // Unlock AudioContext
   document.addEventListener('pointerdown', () => synth.resume(), {once:true});

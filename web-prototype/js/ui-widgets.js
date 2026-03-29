@@ -103,8 +103,8 @@ function drawLiveWaveform(canvas, buf, color) {
 // ─────────────────────────────────────────────────────────
 //  Knob — canvas rotary, drag up/down, dblclick to type
 // ─────────────────────────────────────────────────────────
-function makeKnob({ parent, min, max, value, label, unit='', decimals=1, step=0, color='#00ffb2', onChange, defaultValue }) {
-  const dpr = window.devicePixelRatio || 1, S = 44;
+function makeKnob({ parent, min, max, value, label, unit='', decimals=1, step=0, color='#00ffb2', onChange, defaultValue, log=false }) {
+  const dpr = window.devicePixelRatio || 1, S = 68;
   const wrap = document.createElement('div'); wrap.className = 'knob-wrap';
   const canvas = document.createElement('canvas');
   canvas.width = S*dpr; canvas.height = S*dpr;
@@ -118,21 +118,25 @@ function makeKnob({ parent, min, max, value, label, unit='', decimals=1, step=0,
   let val = value;
   const defVal = defaultValue !== undefined ? defaultValue : value;
 
+  // log scale helpers: value <-> normalised 0..1
+  function toNorm(v) { return log ? Math.log(v/min) / Math.log(max/min) : (v-min)/(max-min); }
+  function fromNorm(n) { return log ? min * Math.pow(max/min, n) : min + n*(max-min); }
+
   function fmt(v) {
     const s = step ? Math.round(v/step)*step : v;
     return parseFloat(s.toFixed(decimals)) + unit;
   }
   let modNorm = null; // null = no modulation display
   function draw() {
-    const n = (val-min)/(max-min), CX=S/2, CY=S/2, R=16;
+    const n = toNorm(val), CX=S/2, CY=S/2, R=24;
     const a0 = 0.75*Math.PI, sweep = 1.5*Math.PI, a1 = a0 + n*sweep;
     c.clearRect(0,0,S,S);
-    c.lineCap = 'round'; c.lineWidth = 3;
+    c.lineCap = 'round'; c.lineWidth = 4;
     c.beginPath(); c.arc(CX,CY,R,a0,a0+sweep); c.strokeStyle='#1c1c3a'; c.stroke();
     if (n > 0.005) { c.beginPath(); c.arc(CX,CY,R,a0,a1); c.strokeStyle=color; c.stroke(); }
-    c.beginPath(); c.arc(CX,CY,4,0,Math.PI*2); c.fillStyle='#12122a'; c.fill();
-    const ix=CX+(R-6)*Math.cos(a1), iy=CY+(R-6)*Math.sin(a1);
-    c.beginPath(); c.arc(ix,iy,2.5,0,Math.PI*2); c.fillStyle='#fff'; c.fill();
+    c.beginPath(); c.arc(CX,CY,6,0,Math.PI*2); c.fillStyle='#12122a'; c.fill();
+    const ix=CX+(R-8)*Math.cos(a1), iy=CY+(R-8)*Math.sin(a1);
+    c.beginPath(); c.arc(ix,iy,3.5,0,Math.PI*2); c.fillStyle='#fff'; c.fill();
     // Modulation ring — outer dot showing live modulated position
     if (modNorm !== null) {
       const Rm = R + 5, nm = Math.max(0, Math.min(1, modNorm));
@@ -162,7 +166,8 @@ function makeKnob({ parent, min, max, value, label, unit='', decimals=1, step=0,
     }
     e.preventDefault(); sy=e.clientY; sv=val; canvas.setPointerCapture(e.pointerId);
     const onMove = e => {
-      val = Math.max(min, Math.min(max, sv + (sy-e.clientY)*(max-min)/200));
+      const rawNorm = Math.max(0, Math.min(1, toNorm(sv) + (sy-e.clientY)/200));
+      val = Math.max(min, Math.min(max, fromNorm(rawNorm)));
       draw(); onChange?.(step ? Math.round(val/step)*step : val);
     };
     const onUp = () => { canvas.removeEventListener('pointermove',onMove); canvas.removeEventListener('pointerup',onUp); };
@@ -177,105 +182,222 @@ function makeKnob({ parent, min, max, value, label, unit='', decimals=1, step=0,
   draw();
   return {
     setValue(v)       { val=Math.max(min,Math.min(max,v)); draw(); },
-    setModValue(v)    { modNorm = v === null ? null : (Math.max(min,Math.min(max,v))-min)/(max-min); draw(); },
+    setModValue(v)    { modNorm = v === null ? null : toNorm(Math.max(min,Math.min(max,v))); draw(); },
     clearModValue()   { modNorm = null; draw(); },
   };
 }
 
 // ─────────────────────────────────────────────────────────
-//  Filter frequency response curve
+//  Filter visualization — 3-layer animated canvas
+//  Layer 1 (amber)  — pre-filter FFT spectrum
+//  Layer 2 (green)  — post-filter FFT spectrum
+//  Layer 3 (purple) — mathematical Bode plot (transfer function)
 // ─────────────────────────────────────────────────────────
-function drawFilterCurve(canvas, filterNode, color, envAmount = 0, modCutoff = null) {
+
+function _computeFilterResponse(type, fc, Q, sr, W) {
+  const w0 = 2 * Math.PI * fc / sr;
+  const cosW = Math.cos(w0), sinW = Math.sin(w0);
+  const alpha = sinW / (2 * Math.max(0.1, Q));
+  let b0, b1, b2, a0, a1, a2;
+  switch (type) {
+    case 'highpass':
+      b0=(1+cosW)/2; b1=-(1+cosW); b2=(1+cosW)/2;
+      a0=1+alpha; a1=-2*cosW; a2=1-alpha; break;
+    case 'bandpass':
+      b0=alpha; b1=0; b2=-alpha;
+      a0=1+alpha; a1=-2*cosW; a2=1-alpha; break;
+    case 'notch':
+      b0=1; b1=-2*cosW; b2=1;
+      a0=1+alpha; a1=-2*cosW; a2=1-alpha; break;
+    default: // lowpass
+      b0=(1-cosW)/2; b1=1-cosW; b2=(1-cosW)/2;
+      a0=1+alpha; a1=-2*cosW; a2=1-alpha; break;
+  }
+  const nb0=b0/a0, nb1=b1/a0, nb2=b2/a0, na1=a1/a0, na2=a2/a0;
+  const result = new Float32Array(W);
+  const FMIN=20, FMAX=20000;
+  for (let x = 0; x < W; x++) {
+    const f = FMIN * Math.pow(FMAX/FMIN, x/W);
+    const w = 2 * Math.PI * f / sr;
+    const numRe = nb0 + nb1*Math.cos(w)  + nb2*Math.cos(2*w);
+    const numIm =     -nb1*Math.sin(w)   - nb2*Math.sin(2*w);
+    const denRe = 1   + na1*Math.cos(w)  + na2*Math.cos(2*w);
+    const denIm =     -na1*Math.sin(w)   - na2*Math.sin(2*w);
+    const mag2 = (numRe*numRe + numIm*numIm) / Math.max(1e-30, denRe*denRe + denIm*denIm);
+    result[x] = 10 * Math.log10(Math.max(1e-10, mag2));
+  }
+  return result;
+}
+
+function drawFilterCurve(canvas, filterNode, color, envAmount = 0, modCutoff = null,
+                          postAnalyser = null, preAnalyser = null,
+                          lfoState = null) {
   const dpr = window.devicePixelRatio || 1;
-  const W = canvas.offsetWidth || 100, H = canvas.offsetHeight || 90;
+  const W = canvas.offsetWidth || 260, H = canvas.offsetHeight || 90;
   if (!W || !H) return;
   canvas.width = W * dpr; canvas.height = H * dpr;
-  const c = canvas.getContext('2d'); c.scale(dpr, dpr);
-  c.fillStyle = '#0a0a18'; c.fillRect(0, 0, W, H);
+  const c = canvas.getContext('2d');
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  c.strokeStyle = 'rgba(255,255,255,0.06)'; c.lineWidth = 0.5;
-  [100, 500, 1000, 5000, 10000].forEach(f => {
-    const x = Math.log10(f / 20) / Math.log10(1000) * W;
-    c.beginPath(); c.moveTo(x, 0); c.lineTo(x, H); c.stroke();
+  const sr = filterNode.context.sampleRate;
+  const FMIN = 20, FMAX = 20000;
+  const DB_TOP = 24, DB_BOT = -72;
+  const freqToX = f => Math.log10(Math.max(FMIN, f) / FMIN) / Math.log10(FMAX/FMIN) * W;
+  const dBtoY   = db => Math.max(1, Math.min(H-1, H - (db - DB_BOT) / (DB_TOP - DB_BOT) * H));
+
+  // ── Background ───────────────────────────────────────
+  c.fillStyle = '#06060f'; c.fillRect(0, 0, W, H);
+
+  // Grid verticals (frequency markers)
+  c.strokeStyle = 'rgba(255,255,255,0.05)'; c.lineWidth = 0.5;
+  [50,100,200,500,1000,2000,5000,10000].forEach(f => {
+    const x = freqToX(f);
+    c.beginPath(); c.moveTo(x,0); c.lineTo(x,H); c.stroke();
+    if (f === 100 || f === 1000 || f === 10000) {
+      c.fillStyle='rgba(255,255,255,0.15)'; c.font='8px monospace';
+      c.fillText(f>=1000?f/1000+'k':f+'', x+2, H-3);
+    }
   });
-  c.strokeStyle = 'rgba(255,255,255,0.1)';
-  c.beginPath(); c.moveTo(0, H/2); c.lineTo(W, H/2); c.stroke();
+  // 0dB line
+  c.strokeStyle = 'rgba(255,255,255,0.08)'; c.lineWidth = 0.5;
+  const y0 = dBtoY(0);
+  c.beginPath(); c.moveTo(0,y0); c.lineTo(W,y0); c.stroke();
 
-  const pts = W * 2;
-  const freqs = new Float32Array(pts);
-  const mags  = new Float32Array(pts);
-  const phase = new Float32Array(pts);
-  for (let i = 0; i < pts; i++) freqs[i] = 20 * Math.pow(1000, i / pts);
-  filterNode.getFrequencyResponse(freqs, mags, phase);
-
-  const dBRange = 30;
-  const toY = m => H/2 - (20 * Math.log10(Math.max(1e-5, m)) / dBRange) * (H/2);
-
-  // ENV ghost curve: show peak cutoff position using a temp filter
-  if (envAmount > 0) {
-    const tmp = filterNode.context.createBiquadFilter();
-    tmp.type = filterNode.type;
-    tmp.frequency.value = Math.min(20000, filterNode.frequency.value + envAmount);
-    tmp.Q.value = filterNode.Q.value;
-    const magsEnv = new Float32Array(pts);
-    tmp.getFrequencyResponse(freqs, magsEnv, new Float32Array(pts));
-    c.save(); c.globalAlpha = 0.25; c.strokeStyle = color;
-    c.setLineDash([3, 3]); c.lineWidth = 1; c.lineJoin = 'round';
-    c.beginPath(); c.moveTo(0, toY(magsEnv[0]));
-    for (let i = 1; i < pts; i++) c.lineTo((i/pts)*W, Math.max(0, Math.min(H, toY(magsEnv[i]))));
-    c.stroke(); c.setLineDash([]); c.restore();
+  // ── Layer 1: Pre-filter FFT (amber) ─────────────────
+  if (preAnalyser) {
+    const buf = new Uint8Array(preAnalyser.frequencyBinCount);
+    preAnalyser.getByteFrequencyData(buf);
+    c.save(); c.globalAlpha = 0.5; c.fillStyle = '#c8830a';
+    c.beginPath(); c.moveTo(0, H);
+    for (let x = 0; x < W; x++) {
+      const f = FMIN * Math.pow(FMAX/FMIN, x/W);
+      const bin = Math.min(buf.length-1, Math.round(f / sr * buf.length * 2));
+      const db = (buf[bin]/255)*80 - 80;
+      c.lineTo(x, dBtoY(Math.max(DB_BOT, db)));
+    }
+    c.lineTo(W,H); c.closePath(); c.fill(); c.restore();
   }
 
-  // Fill
-  c.save(); c.globalAlpha = 0.12; c.fillStyle = color;
-  c.beginPath(); c.moveTo(0, toY(mags[0]));
-  for (let i = 1; i < pts; i++) c.lineTo((i/pts)*W, Math.max(0, Math.min(H, toY(mags[i]))));
-  c.lineTo(W, H); c.lineTo(0, H); c.closePath(); c.fill(); c.restore();
-
-  // Glow
-  c.save(); c.globalAlpha = 0.4; c.strokeStyle = color;
-  c.shadowColor = color; c.shadowBlur = 8; c.lineWidth = 3; c.lineJoin = 'round';
-  c.beginPath(); c.moveTo(0, toY(mags[0]));
-  for (let i = 1; i < pts; i++) c.lineTo((i/pts)*W, Math.max(0, Math.min(H, toY(mags[i]))));
-  c.stroke(); c.restore();
-
-  // Main line
-  c.strokeStyle = color; c.shadowColor = color; c.shadowBlur = 4;
-  c.lineWidth = 1.5; c.lineJoin = 'round';
-  c.beginPath(); c.moveTo(0, toY(mags[0]));
-  for (let i = 1; i < pts; i++) c.lineTo((i/pts)*W, Math.max(0, Math.min(H, toY(mags[i]))));
-  c.stroke();
-
-  // Live modulation overlay: ghost curve at modulated cutoff + vertical cursor
-  if (modCutoff !== null) {
-    const tmp = filterNode.context.createBiquadFilter();
-    tmp.type = filterNode.type;
-    tmp.frequency.value = Math.max(20, Math.min(20000, modCutoff));
-    tmp.Q.value = filterNode.Q.value;
-    const magsMod = new Float32Array(pts);
-    tmp.getFrequencyResponse(freqs, magsMod, new Float32Array(pts));
-
-    // Ghost fill
-    c.save(); c.globalAlpha = 0.18; c.fillStyle = '#ffffff';
-    c.beginPath(); c.moveTo(0, toY(magsMod[0]));
-    for (let i = 1; i < pts; i++) c.lineTo((i/pts)*W, Math.max(0, Math.min(H, toY(magsMod[i]))));
-    c.lineTo(W, H); c.lineTo(0, H); c.closePath(); c.fill(); c.restore();
-
-    // Ghost line
-    c.save(); c.globalAlpha = 0.7; c.strokeStyle = '#ffffff';
-    c.shadowColor = '#ffffff'; c.shadowBlur = 6; c.lineWidth = 1; c.lineJoin = 'round';
-    c.beginPath(); c.moveTo(0, toY(magsMod[0]));
-    for (let i = 1; i < pts; i++) c.lineTo((i/pts)*W, Math.max(0, Math.min(H, toY(magsMod[i]))));
+  // ── Layer 2: Post-filter FFT (green) ────────────────
+  if (postAnalyser) {
+    const buf = new Uint8Array(postAnalyser.frequencyBinCount);
+    postAnalyser.getByteFrequencyData(buf);
+    c.save(); c.globalAlpha = 0.55; c.fillStyle = '#00c87a';
+    c.beginPath(); c.moveTo(0, H);
+    for (let x = 0; x < W; x++) {
+      const f = FMIN * Math.pow(FMAX/FMIN, x/W);
+      const bin = Math.min(buf.length-1, Math.round(f / sr * buf.length * 2));
+      const db = (buf[bin]/255)*80 - 80;
+      c.lineTo(x, dBtoY(Math.max(DB_BOT, db)));
+    }
+    c.lineTo(W,H); c.closePath(); c.fill();
+    // bright line on top
+    c.globalAlpha = 0.9; c.strokeStyle = '#00e09a';
+    c.shadowColor = '#00e09a'; c.shadowBlur = 4; c.lineWidth = 1.2; c.lineJoin='round';
+    c.beginPath();
+    for (let x = 0; x < W; x++) {
+      const f = FMIN * Math.pow(FMAX/FMIN, x/W);
+      const bin = Math.min(buf.length-1, Math.round(f / sr * buf.length * 2));
+      const db = (buf[bin]/255)*80 - 80;
+      x===0 ? c.moveTo(x, dBtoY(Math.max(DB_BOT,db))) : c.lineTo(x, dBtoY(Math.max(DB_BOT,db)));
+    }
     c.stroke(); c.restore();
+  }
 
-    // Vertical cursor at modulated frequency
-    const xMod = Math.log10(Math.max(20, modCutoff) / 20) / Math.log10(1000) * W;
-    c.save(); c.globalAlpha = 0.6; c.strokeStyle = '#ffffff';
-    c.shadowColor = '#ffffff'; c.shadowBlur = 4; c.lineWidth = 1;
-    c.setLineDash([2, 3]);
-    c.beginPath(); c.moveTo(xMod, 0); c.lineTo(xMod, H); c.stroke();
+  // ── Layer 3: Bode plot — compute current cutoff ──────
+  const fc   = filterNode.frequency.value;
+  const Q    = filterNode.Q.value;
+  const type = filterNode.type;
+
+  // LFO-modulated cutoff
+  let liveFc = fc;
+  if (lfoState && lfoState.active && lfoState.points && lfoState.points.length > 0) {
+    const phase = (lfoState.phase * lfoState.mult) % 1;
+    const idx   = Math.min(lfoState.points.length-1, Math.floor(phase * lfoState.points.length));
+    const val   = lfoState.points[idx]; // 0..1
+    const sliderCenter = Math.log10(fc/FMIN) / Math.log10(FMAX/FMIN);
+    const lo = FMIN * Math.pow(FMAX/FMIN, Math.max(0, sliderCenter - lfoState.depth * sliderCenter));
+    const hi = FMIN * Math.pow(FMAX/FMIN, Math.min(1, sliderCenter + lfoState.depth * (1-sliderCenter)));
+    liveFc = lo * Math.pow(Math.max(1, hi/lo), val);
+  } else if (modCutoff !== null) {
+    liveFc = modCutoff;
+  }
+
+  // Sweep ghost (LFO range fill between lo and hi curves)
+  if (lfoState && lfoState.active && lfoState.depth > 0.02) {
+    const sliderCenter = Math.log10(fc/FMIN) / Math.log10(FMAX/FMIN);
+    const loFc = FMIN * Math.pow(FMAX/FMIN, Math.max(0,   sliderCenter - lfoState.depth * sliderCenter));
+    const hiFc = FMIN * Math.pow(FMAX/FMIN, Math.min(1,   sliderCenter + lfoState.depth * (1-sliderCenter)));
+    const rLo = _computeFilterResponse(type, loFc, Q, sr, W);
+    const rHi = _computeFilterResponse(type, hiFc, Q, sr, W);
+    c.save(); c.globalAlpha = 0.07; c.fillStyle = '#a855f7';
+    c.beginPath();
+    rLo.forEach((db,x) => x===0 ? c.moveTo(x, dBtoY(db)) : c.lineTo(x, dBtoY(db)));
+    for (let x=W-1;x>=0;x--) c.lineTo(x, dBtoY(rHi[x]));
+    c.closePath(); c.fill();
+    // ghost outline lo
+    c.globalAlpha=0.2; c.strokeStyle='#a855f7'; c.lineWidth=0.8; c.setLineDash([2,3]);
+    c.beginPath(); rLo.forEach((db,x)=>x===0?c.moveTo(x,dBtoY(db)):c.lineTo(x,dBtoY(db))); c.stroke();
+    c.beginPath(); rHi.forEach((db,x)=>x===0?c.moveTo(x,dBtoY(db)):c.lineTo(x,dBtoY(db))); c.stroke();
     c.setLineDash([]); c.restore();
   }
+
+  // ENV ghost: dashed curve showing filter peak when envelope fires
+  if (envAmount > 0) {
+    const envFc = Math.max(20, Math.min(20000, fc + envAmount));
+    const respEnv = _computeFilterResponse(type, envFc, Q, sr, W);
+    c.save(); c.globalAlpha=0.45; c.strokeStyle='#e879f9';
+    c.setLineDash([3,4]); c.lineWidth=1.2; c.lineJoin='round';
+    c.shadowColor='#e879f9'; c.shadowBlur=4;
+    c.beginPath(); respEnv.forEach((db,x)=>x===0?c.moveTo(x,dBtoY(db)):c.lineTo(x,dBtoY(db)));
+    c.stroke(); c.setLineDash([]); c.restore();
+    // vertical marker at ENV peak cutoff
+    const xEnv = freqToX(envFc);
+    c.save(); c.globalAlpha=0.3; c.strokeStyle='#e879f9'; c.lineWidth=1; c.setLineDash([1,4]);
+    c.beginPath(); c.moveTo(xEnv,0); c.lineTo(xEnv,H); c.stroke();
+    c.setLineDash([]); c.restore();
+  }
+
+  // Draw Bode at liveFc
+  const resp = _computeFilterResponse(type, liveFc, Q, sr, W);
+  // fill
+  c.save(); c.globalAlpha=0.14; c.fillStyle='#a855f7';
+  c.beginPath(); c.moveTo(0,H);
+  resp.forEach((db,x)=>c.lineTo(x,dBtoY(db)));
+  c.lineTo(W,H); c.closePath(); c.fill(); c.restore();
+  // glow stroke
+  c.save(); c.globalAlpha=0.4; c.strokeStyle='#a855f7';
+  c.shadowColor='#a855f7'; c.shadowBlur=8; c.lineWidth=3; c.lineJoin='round';
+  c.beginPath(); resp.forEach((db,x)=>x===0?c.moveTo(x,dBtoY(db)):c.lineTo(x,dBtoY(db)));
+  c.stroke(); c.restore();
+  // main line
+  c.save(); c.strokeStyle='#c084fc'; c.lineWidth=1.5; c.lineJoin='round';
+  c.shadowColor='#a855f7'; c.shadowBlur=3;
+  c.beginPath(); resp.forEach((db,x)=>x===0?c.moveTo(x,dBtoY(db)):c.lineTo(x,dBtoY(db)));
+  c.stroke(); c.restore();
+
+  // ── Cutoff frequency line ────────────────────────────
+  // Static (dashed, dim) at fc
+  const fcStaticX = freqToX(fc);
+  c.save(); c.strokeStyle='rgba(168,85,247,0.3)'; c.lineWidth=1; c.setLineDash([2,4]);
+  c.beginPath(); c.moveTo(fcStaticX,0); c.lineTo(fcStaticX,H); c.stroke();
+  c.setLineDash([]); c.restore();
+
+  // Live (solid glowing) at liveFc when it differs
+  const fcLiveX = freqToX(liveFc);
+  const isModulated = Math.abs(fcLiveX - fcStaticX) > 2;
+  c.save();
+  c.strokeStyle = isModulated ? '#00e09a' : 'rgba(168,85,247,0.7)';
+  c.shadowColor  = isModulated ? '#00e09a' : '#a855f7';
+  c.shadowBlur = 6; c.lineWidth = isModulated ? 1.5 : 1;
+  c.beginPath(); c.moveTo(fcLiveX,0); c.lineTo(fcLiveX,H); c.stroke(); c.restore();
+
+  // Hz label
+  const fcLabel = liveFc >= 1000 ? (liveFc/1000).toFixed(1)+'k' : Math.round(liveFc)+'Hz';
+  c.save();
+  c.fillStyle = isModulated ? '#00e09a' : 'rgba(168,85,247,0.9)';
+  c.font = 'bold 9px monospace'; c.shadowColor = c.fillStyle; c.shadowBlur = 4;
+  c.fillText(fcLabel, Math.min(W-32, fcLiveX+4), 12); c.restore();
 }
 
 // ─────────────────────────────────────────────────────────

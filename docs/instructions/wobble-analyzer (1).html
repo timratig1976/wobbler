@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>WOBBLE ANALYZER</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#080808;--p:#101010;--p2:#181818;--bdr:#1e1e1e;--bdr2:#2a2a2a;
+  --txt:#d0d0d0;--dim:#555;--t2:#777;
+  --g:#00e09a;--g2:#00a870;
+  --r:#ff2d55;--a:#ffaa00;--pu:#a855f7;--bl:#3b82f6;--cy:#22d3ee;
+}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{background:var(--bg);color:var(--txt);font-family:'Share Tech Mono',monospace;
+  font-size:11px;min-height:100vh;padding:12px 12px 40px}
+
+.logo{font-family:'Bebas Neue',sans-serif;font-size:30px;letter-spacing:5px;
+  color:var(--g);margin-bottom:2px}
+.logo-sub{font-size:10px;color:var(--dim);letter-spacing:3px;margin-bottom:14px}
+
+/* drop zone */
+.drop{border:2px dashed var(--bdr2);border-radius:8px;padding:28px 16px;
+  text-align:center;cursor:pointer;position:relative;transition:.2s;
+  background:linear-gradient(135deg,#0a0a0a 0%,#101008 100%)}
+.drop:hover,.drop.over{border-color:var(--g);background:#0a120e}
+.drop input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+.drop-icon{font-size:40px;margin-bottom:10px;filter:grayscale(1);transition:.2s}
+.drop:hover .drop-icon{filter:none}
+.drop-title{font-family:'Bebas Neue',sans-serif;font-size:22px;letter-spacing:3px;
+  color:var(--dim);transition:.2s}
+.drop:hover .drop-title{color:var(--g)}
+.drop-sub{font-size:10px;color:var(--dim);margin-top:6px}
+
+/* grid layout */
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+.grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+@media(max-width:560px){.grid,.grid-3{grid-template-columns:1fr}}
+
+/* panels */
+.pan{background:var(--p);border:1px solid var(--bdr);border-radius:6px;padding:12px}
+.pt{font-family:'Bebas Neue',sans-serif;font-size:13px;letter-spacing:3px;
+  color:var(--g);margin-bottom:10px;padding-bottom:6px;
+  border-bottom:1px solid var(--bdr);display:flex;align-items:center;gap:8px}
+.pt .dot{width:6px;height:6px;border-radius:50%;background:var(--g);flex-shrink:0}
+.pt.pu{color:var(--pu)}.pt.pu .dot{background:var(--pu)}
+.pt.a{color:var(--a)}.pt.a .dot{background:var(--a)}
+.pt.r{color:var(--r)}.pt.r .dot{background:var(--r)}
+.pt.bl{color:var(--bl)}.pt.bl .dot{background:var(--bl)}
+.pt.cy{color:var(--cy)}.pt.cy .dot{background:var(--cy)}
+
+/* big metrics */
+.metric{text-align:center;padding:8px 4px}
+.metric-val{font-family:'Bebas Neue',sans-serif;font-size:36px;line-height:1;
+  color:var(--g);letter-spacing:2px}
+.metric-val.pu{color:var(--pu)}.metric-val.a{color:var(--a)}
+.metric-val.r{color:var(--r)}.metric-val.bl{color:var(--bl)}.metric-val.cy{color:var(--cy)}
+.metric-lbl{font-size:9px;color:var(--dim);letter-spacing:2px;margin-top:4px}
+.metric-sub{font-size:10px;color:var(--t2);margin-top:2px}
+
+/* canvases */
+canvas{display:block;border-radius:4px;background:var(--p2);border:1px solid var(--bdr)}
+.cv-lbl{font-size:9px;color:var(--dim);margin-bottom:4px;letter-spacing:1px}
+
+/* note pills */
+.note-pills{display:flex;gap:4px;flex-wrap:wrap;margin-top:6px}
+.pill{padding:3px 8px;border-radius:12px;font-size:10px;font-weight:bold;
+  border:1px solid currentColor;letter-spacing:.5px}
+
+/* confidence bar */
+.conf-bar{height:4px;background:var(--bdr2);border-radius:2px;margin-top:4px;overflow:hidden}
+.conf-fill{height:100%;border-radius:2px;transition:width .4s}
+
+/* rhythm grid */
+.rgrid{display:flex;gap:2px;margin-top:6px}
+.rs{width:100%;aspect-ratio:1;border-radius:2px;transition:.1s}
+.rs.on{opacity:1}.rs.off{opacity:.12}
+
+/* export buttons */
+.xbtn{width:100%;padding:9px;border:1px solid var(--bdr2);background:var(--p2);
+  color:var(--dim);font-family:'Share Tech Mono',monospace;font-size:10px;
+  cursor:pointer;border-radius:4px;transition:.12s;letter-spacing:1px;margin-top:5px}
+.xbtn:hover{border-color:var(--g);color:var(--g);background:#0a120e}
+.xbtn.pu:hover{border-color:var(--pu);color:var(--pu);background:#0e0a1a}
+.xbtn.a:hover{border-color:var(--a);color:var(--a);background:#1a1200}
+
+/* progress */
+.progress-wrap{position:relative;height:3px;background:var(--bdr2);border-radius:2px;
+  margin:10px 0;overflow:hidden}
+.progress-bar{position:absolute;inset:0;background:linear-gradient(90deg,var(--pu),var(--g));
+  width:0%;transition:width .1s;border-radius:2px}
+.status{font-size:10px;color:var(--pu);letter-spacing:1px;margin-bottom:6px;min-height:16px}
+
+/* row */
+.row{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.lbl{font-size:9px;color:var(--dim);letter-spacing:1px;min-width:68px}
+.val{font-size:11px;color:var(--txt);font-weight:bold}
+.val.g{color:var(--g)}.val.pu{color:var(--pu)}.val.a{color:var(--a)}
+</style>
+</head>
+<body>
+
+<div class="logo">WOBBLE ANALYZER</div>
+<div class="logo-sub">// EXTRACT · DETECT · TRANSFER</div>
+
+<!-- DROP ZONE -->
+<div class="drop" id="drop">
+  <input type="file" id="fileIn" accept="audio/*">
+  <div class="drop-icon">🎛️</div>
+  <div class="drop-title">DROP WOBBLE SAMPLE</div>
+  <div class="drop-sub">WAV · MP3 · OGG · FLAC — drag here or tap to choose</div>
+</div>
+
+<!-- PROGRESS -->
+<div id="statusEl" class="status" style="margin-top:10px"></div>
+<div class="progress-wrap" id="progWrap" style="display:none">
+  <div class="progress-bar" id="progBar"></div>
+</div>
+
+<!-- RESULTS -->
+<div id="results" style="display:none">
+
+  <!-- WAVEFORM + SPECTRUM -->
+  <div style="margin-top:12px">
+    <div class="cv-lbl">WAVEFORM + ONSET MARKERS</div>
+    <canvas id="wfCv" style="width:100%;height:80px"></canvas>
+  </div>
+
+  <!-- KEY METRICS ROW -->
+  <div class="grid-3" style="margin-top:10px">
+    <div class="pan metric">
+      <div class="metric-val" id="resBPM">—</div>
+      <div class="metric-lbl">BPM</div>
+      <div class="metric-sub" id="resBPMsub">—</div>
+    </div>
+    <div class="pan metric">
+      <div class="metric-val pu" id="resRoot">—</div>
+      <div class="metric-lbl">ROOT NOTE</div>
+      <div class="metric-sub" id="resRootSub">—</div>
+    </div>
+    <div class="pan metric">
+      <div class="metric-val a" id="resLFO">—</div>
+      <div class="metric-lbl">LFO RATE</div>
+      <div class="metric-sub" id="resLFOsub">—</div>
+    </div>
+  </div>
+
+  <!-- MAIN ANALYSIS GRID -->
+  <div class="grid" style="margin-top:10px">
+
+    <!-- PITCH / SCALE -->
+    <div class="pan">
+      <div class="pt pu"><div class="dot"></div>PITCH ANALYSIS</div>
+      <div class="row"><span class="lbl">ROOT</span><span class="val pu" id="pRoot">—</span></div>
+      <div class="row"><span class="lbl">SCALE</span><span class="val" id="pScale">—</span></div>
+      <div class="row"><span class="lbl">CONFIDENCE</span><span class="val" id="pConf">—</span></div>
+      <div class="conf-bar"><div class="conf-fill" id="pConfBar" style="background:var(--pu)"></div></div>
+      <div class="cv-lbl" style="margin-top:10px">CHROMAGRAM (detected notes)</div>
+      <canvas id="chromaCv" style="width:100%;height:52px"></canvas>
+      <div class="note-pills" id="notesPills"></div>
+    </div>
+
+    <!-- FILTER / LFO -->
+    <div class="pan">
+      <div class="pt a"><div class="dot"></div>FILTER + LFO</div>
+      <div class="row"><span class="lbl">LFO RATE</span><span class="val a" id="fLFO">—</span></div>
+      <div class="row"><span class="lbl">SYNC</span><span class="val" id="fSync">—</span></div>
+      <div class="row"><span class="lbl">CUTOFF EST.</span><span class="val" id="fCut">—</span></div>
+      <div class="row"><span class="lbl">FILTER TYPE</span><span class="val" id="fType">—</span></div>
+      <div class="cv-lbl" style="margin-top:10px">SPECTRAL CENTROID OVER TIME (filter movement)</div>
+      <canvas id="centCv" style="width:100%;height:52px"></canvas>
+    </div>
+
+    <!-- RHYTHM -->
+    <div class="pan">
+      <div class="pt r"><div class="dot"></div>RHYTHM PATTERN</div>
+      <div class="row"><span class="lbl">DENSITY</span><span class="val" id="rDens">—</span></div>
+      <div class="row"><span class="lbl">SWING EST.</span><span class="val" id="rSwing">—</span></div>
+      <div class="row"><span class="lbl">TIME SIG</span><span class="val" id="rTime">—</span></div>
+      <div class="cv-lbl" style="margin-top:10px">DETECTED HITS (16 steps)</div>
+      <div class="rgrid" id="rhythmGrid"></div>
+    </div>
+
+    <!-- TIMBRE / CHARACTER -->
+    <div class="pan">
+      <div class="pt cy"><div class="dot"></div>TIMBRE + CHARACTER</div>
+      <div class="row"><span class="lbl">BRIGHTNESS</span><span class="val" id="tBright">—</span></div>
+      <div class="row"><span class="lbl">DISTORTION</span><span class="val" id="tDist">—</span></div>
+      <div class="row"><span class="lbl">SUB ENERGY</span><span class="val" id="tSub">—</span></div>
+      <div class="row"><span class="lbl">WOBBLE AMT</span><span class="val cy" id="tWobble">—</span></div>
+      <div class="cv-lbl" style="margin-top:10px">FREQUENCY SPECTRUM</div>
+      <canvas id="specCv" style="width:100%;height:52px"></canvas>
+    </div>
+  </div>
+
+  <!-- FULL SPECTRUM -->
+  <div class="pan" style="margin-top:10px">
+    <div class="pt bl"><div class="dot"></div>SPECTRAL ANALYSIS</div>
+    <canvas id="fullSpecCv" style="width:100%;height:100px"></canvas>
+  </div>
+
+  <!-- EXPORT / TRANSFER -->
+  <div class="pan" style="margin-top:10px">
+    <div class="pt"><div class="dot"></div>TRANSFER TO TOOLS</div>
+    <div style="font-size:10px;color:var(--t2);margin-bottom:10px;line-height:1.7">
+      Copy detected settings to clipboard — paste into Voice Module or Seq Module
+    </div>
+    <div class="grid-3">
+      <div>
+        <button class="xbtn" onclick="exportVoice()">⬇ VOICE MODULE SETTINGS</button>
+        <div style="font-size:9px;color:var(--dim);margin-top:4px;line-height:1.6" id="voiceExportInfo">
+          Cutoff · LFO rate · waveform suggestion
+        </div>
+      </div>
+      <div>
+        <button class="xbtn pu" onclick="exportPattern()">⬇ SEQ PATTERN (MIDI-ready)</button>
+        <div style="font-size:9px;color:var(--dim);margin-top:4px;line-height:1.6" id="patternExportInfo">
+          Root note · BPM · rhythm hits
+        </div>
+      </div>
+      <div>
+        <button class="xbtn a" onclick="exportAll()">⬇ FULL ANALYSIS JSON</button>
+        <div style="font-size:9px;color:var(--dim);margin-top:4px;line-height:1.6">
+          All detected parameters as JSON
+        </div>
+      </div>
+    </div>
+    <div id="exportOutput" style="display:none;margin-top:10px;padding:10px;
+      background:var(--p2);border:1px solid var(--bdr);border-radius:4px;
+      font-size:10px;color:var(--g);white-space:pre-wrap;word-break:break-all;
+      max-height:200px;overflow-y:auto;line-height:1.7"></div>
+  </div>
+
+</div><!-- /results -->
+
+<script>
+'use strict';
+
+// ═══════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════
+let audioData=null, sampleRate=0, duration=0, fileName='';
+let analysis = {}; // all results
+let onsetTimes = [];
+
+// ═══════════════════════════════════════
+// DROP + LOAD
+// ═══════════════════════════════════════
+const drop=document.getElementById('drop');
+drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('over')});
+drop.addEventListener('dragleave',()=>drop.classList.remove('over'));
+drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('over');
+  const f=e.dataTransfer?.files?.[0]; if(f) loadFile(f)});
+document.getElementById('fileIn').addEventListener('change',e=>{
+  const f=e.target.files?.[0]; if(f) loadFile(f)});
+
+async function loadFile(file){
+  fileName=file.name;
+  setStatus('Decoding audio...',10);
+  const ab=await file.arrayBuffer();
+  const ctx=new(window.AudioContext||window.webkitAudioContext)();
+  const buf=await ctx.decodeAudioData(ab);
+  audioData=buf.getChannelData(0);
+  sampleRate=buf.sampleRate;
+  duration=buf.duration;
+  await ctx.close();
+  setStatus('Analysing...',20);
+  await runAnalysis();
+}
+
+function setStatus(msg,pct){
+  document.getElementById('statusEl').textContent='// '+msg;
+  const pw=document.getElementById('progWrap');
+  pw.style.display='block';
+  document.getElementById('progBar').style.width=pct+'%';
+}
+function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
+
+// ═══════════════════════════════════════
+// MAIN ANALYSIS PIPELINE
+// ═══════════════════════════════════════
+async function runAnalysis(){
+  document.getElementById('results').style.display='block';
+
+  setStatus('Detecting BPM...',25);
+  await sleep(20);
+  const bpmResult=detectBPM();
+  analysis.bpm=bpmResult.bpm;
+  analysis.bpmConf=bpmResult.conf;
+
+  setStatus('Detecting pitch + scale...',40);
+  await sleep(20);
+  const pitchResult=detectPitch();
+  analysis.root=pitchResult.root;
+  analysis.scale=pitchResult.scale;
+  analysis.chroma=pitchResult.chroma;
+  analysis.pitchConf=pitchResult.conf;
+
+  setStatus('Analysing filter + LFO...',55);
+  await sleep(20);
+  const filtResult=detectFilter();
+  analysis.lfoHz=filtResult.lfoHz;
+  analysis.lfoSync=filtResult.sync;
+  analysis.cutoffEst=filtResult.cutoff;
+  analysis.filtType=filtResult.type;
+  analysis.centroids=filtResult.centroids;
+
+  setStatus('Extracting rhythm...',70);
+  await sleep(20);
+  const rhythmResult=detectRhythm();
+  analysis.hits=rhythmResult.hits;
+  analysis.density=rhythmResult.density;
+  analysis.swing=rhythmResult.swing;
+
+  setStatus('Analysing timbre...',85);
+  await sleep(20);
+  const timbreResult=detectTimbre();
+  analysis.brightness=timbreResult.brightness;
+  analysis.distortion=timbreResult.distortion;
+  analysis.subEnergy=timbreResult.sub;
+  analysis.wobbleAmt=timbreResult.wobble;
+  analysis.spectrum=timbreResult.spectrum;
+
+  setStatus('Rendering...',95);
+  await sleep(20);
+  renderAll();
+  setStatus('Analysis complete — '+fileName,100);
+}
+
+// ═══════════════════════════════════════
+// BPM DETECTION (4-method)
+// ═══════════════════════════════════════
+function detectBPM(){
+  const win=Math.round(sampleRate*.023),hop=Math.floor(win/2),hd=hop/sampleRate;
+  const energies=[];
+  for(let i=0;i+win<audioData.length;i+=hop){
+    let e=0;for(let j=0;j<win;j++)e+=audioData[i+j]**2;energies.push(e/win);
+  }
+  // Onset detection for timing
+  const flux=[];for(let i=1;i<energies.length;i++)flux.push(Math.max(0,energies[i]-energies[i-1]));
+  const fmean=flux.reduce((a,b)=>a+b,0)/flux.length;
+  onsetTimes=[];let lastOn=-1;
+  for(let i=0;i<flux.length;i++){const t=i*hd;if(flux[i]>fmean*2.2&&t-lastOn>.08){onsetTimes.push(t);lastOn=t;}}
+
+  // Autocorrelation
+  const sub=energies.slice(0,Math.min(energies.length,2000));
+  const lagMin=Math.floor(60/(210*hd)),lagMax=Math.ceil(60/(120*hd));
+  let best={score:-Infinity,bpm:174,raw:0};
+  let maxRaw=0;
+  for(let lag=lagMin;lag<=lagMax;lag++){
+    let c=0;for(let i=0;i<sub.length-lag;i++)c+=sub[i]*sub[i+lag];
+    maxRaw=Math.max(maxRaw,c);
+    const bpm=60/(lag*hd);
+    const prior=bpm>=168&&bpm<=180?1.5:bpm>=160&&bpm<=185?1.25:bpm>=140&&bpm<=195?1.0:.7;
+    if(c*prior>best.score){best={score:c*prior,raw:c,bpm};}
+  }
+  // Grid fit refinement
+  let refined=best.bpm,refinedScore=-1;
+  for(let b=best.bpm-6;b<=best.bpm+6;b+=0.1){
+    const bd=60/b;let s=0;
+    onsetTimes.forEach(t=>{const ph=(t%bd)/bd;s+=Math.exp(-(Math.min(ph,1-ph)**2)*200);});
+    if(s>refinedScore){refinedScore=s;refined=b;}
+  }
+  refined=Math.round(refined*10)/10;
+  return {bpm:refined,conf:Math.min(1,best.raw/maxRaw)};
+}
+
+// ═══════════════════════════════════════
+// PITCH + SCALE DETECTION
+// ═══════════════════════════════════════
+function detectPitch(){
+  // Chromagram — analyze frequency content per semitone
+  const N=4096,hop=N/2;
+  const chroma=new Float32Array(12).fill(0);
+  const steps=Math.floor((audioData.length-N)/hop);
+  // Simple FFT-based chroma via magnitude spectrum
+  for(let s=0;s<Math.min(steps,200);s++){
+    const frame=audioData.slice(s*hop,s*hop+N);
+    const mag=computeFFTMag(frame);
+    // Map FFT bins to semitones
+    for(let k=1;k<N/2;k++){
+      const freq=k*sampleRate/N;
+      if(freq<40||freq>2000) continue;
+      const midi=Math.round(12*Math.log2(freq/440)+69);
+      const semi=((midi%12)+12)%12;
+      chroma[semi]+=mag[k];
+    }
+  }
+  // Normalize
+  const maxC=Math.max(...chroma);
+  chroma.forEach((_,i)=>chroma[i]/=maxC||1);
+
+  // Detect root — strongest low-frequency bin
+  // Focus on bass range: analyze first 0.5s at low freq
+  const bassFFT=computeFFTMag(audioData.slice(0,Math.min(audioData.length,Math.round(sampleRate*.5))));
+  const noteNames=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  let bestRoot=5,bestRootScore=-1; // default F
+  for(let k=2;k<bassFFT.length/8;k++){
+    const freq=k*sampleRate/(bassFFT.length*2||4096);
+    if(freq<30||freq>400) continue;
+    if(bassFFT[k]>bestRootScore){bestRootScore=bassFFT[k];
+      const midi=Math.round(12*Math.log2(freq/440)+69);
+      bestRoot=((midi%12)+12)%12;}
+  }
+
+  // Detect scale (minor vs major) using chroma
+  const minorProfile=[1,.1,.2,1,.1,.6,.1,1,.1,.3,.5,.1]; // relative to root
+  const majorProfile=[1,.1,.2,.1,1,.6,.1,1,.1,.5,.1,.2];
+  let minorScore=0,majorScore=0;
+  for(let i=0;i<12;i++){
+    minorScore+=chroma[(bestRoot+i)%12]*minorProfile[i];
+    majorScore+=chroma[(bestRoot+i)%12]*majorProfile[i];
+  }
+  const scale=minorScore>majorScore?'MINOR':'MAJOR';
+  const conf=Math.abs(minorScore-majorScore)/(minorScore+majorScore+.001);
+
+  return{root:noteNames[bestRoot],scale,chroma,conf:Math.min(1,conf*3)};
+}
+
+function computeFFTMag(frame){
+  // Simple DFT for small frames (N limited)
+  const N=Math.min(frame.length,2048);
+  const mag=new Float32Array(N/2);
+  // Apply Hann window
+  const win=new Float32Array(N);
+  for(let i=0;i<N;i++) win[i]=frame[i]*.5*(1-Math.cos(2*Math.PI*i/N));
+  // Rough magnitude via autocorrelation-based approach for speed
+  // Full DFT is slow in JS — use chunked
+  for(let k=0;k<N/2;k++){
+    let re=0,im=0;
+    for(let n=0;n<N;n+=4){ // stride for speed
+      const ang=2*Math.PI*k*n/N;
+      re+=win[n]*Math.cos(ang); im+=win[n]*Math.sin(ang);
+    }
+    mag[k]=Math.sqrt(re*re+im*im);
+  }
+  return mag;
+}
+
+// ═══════════════════════════════════════
+// FILTER + LFO DETECTION
+// ═══════════════════════════════════════
+function detectFilter(){
+  // Spectral centroid over time — tracks filter cutoff movement
+  const frameSize=Math.round(sampleRate*.05); // 50ms frames
+  const centroids=[];
+  for(let i=0;i+frameSize<audioData.length;i+=frameSize){
+    const frame=audioData.slice(i,i+frameSize);
+    const mag=computeFFTMag(frame);
+    let num=0,den=0;
+    for(let k=1;k<mag.length;k++){
+      const f=k*sampleRate/frameSize;
+      num+=f*mag[k]; den+=mag[k];
+    }
+    centroids.push(den>0?num/den:500);
+  }
+
+  // Find LFO rate from periodicity of centroid movement
+  const centNorm=centroids.map(c=>c-centroids.reduce((a,b)=>a+b)/centroids.length);
+  const frameHop=.05; // 50ms frames
+  let bestLFO=0,bestScore=-Infinity;
+  for(let lfoHz=.2;lfoHz<=20;lfoHz+=.1){
+    const period=1/lfoHz;
+    const lagSamples=Math.round(period/frameHop);
+    if(lagSamples>=centNorm.length) continue;
+    let c=0;for(let i=0;i<centNorm.length-lagSamples;i++)c+=centNorm[i]*centNorm[i+lagSamples];
+    // DnB prior
+    const prior=lfoHz>=3&&lfoHz<=6?1.3:lfoHz>=1&&lfoHz<=10?1.1:1;
+    if(c*prior>bestScore){bestScore=c*prior;bestLFO=lfoHz;}
+  }
+  bestLFO=Math.round(bestLFO*10)/10;
+
+  // Estimate cutoff from average centroid
+  const avgCentroid=centroids.reduce((a,b)=>a+b)/centroids.length;
+  const minCent=Math.min(...centroids),maxCent=Math.max(...centroids);
+
+  // BPM sync snap
+  const bpmBased=analysis.bpm||174;
+  const barSec=60/bpmBased*4;
+  const syncMap={
+    '1/1':barSec,'1/2':barSec/2,'1/4':barSec/4,
+    '1/8':barSec/8,'1/8T':barSec/12,'1/16':barSec/16
+  };
+  let bestSync='FREE',bestSyncDiff=Infinity;
+  Object.entries(syncMap).forEach(([name,sec])=>{
+    const hz=1/sec;
+    const diff=Math.abs(bestLFO-hz);
+    if(diff<bestSyncDiff){bestSyncDiff=diff;bestSync=diff<.3?name:'FREE';}
+  });
+
+  // Filter type guess from spectrum shape
+  const highEn=centroids.filter(c=>c>2000).length/centroids.length;
+  const filtType=highEn>.3?'BANDPASS':'LOWPASS';
+
+  return{lfoHz:bestLFO,sync:bestSync,cutoff:Math.round(avgCentroid),
+    type:filtType,centroids,centRange:[minCent,maxCent]};
+}
+
+// ═══════════════════════════════════════
+// RHYTHM DETECTION
+// ═══════════════════════════════════════
+function detectRhythm(){
+  const bpm=analysis.bpm||174;
+  const barDur=60/bpm*4;
+  const stepDur=barDur/16;
+  // Map onsets to 16-step grid
+  const hits=new Array(16).fill(0);
+  onsetTimes.forEach(t=>{
+    const barPos=(t%barDur)/barDur;
+    const step=Math.floor(barPos*16);
+    if(step<16) hits[step]=Math.max(hits[step],1);
+  });
+  // Ensure beat 1
+  if(!hits[0]&&onsetTimes.length>0) hits[0]=1;
+
+  // Swing estimation — compare even vs odd 16th timing
+  let evenSum=0,oddSum=0,evenCount=0,oddCount=0;
+  onsetTimes.forEach(t=>{
+    const barPos=t%barDur;
+    const step=Math.floor(barPos/stepDur);
+    const ideal=step*stepDur;
+    const offset=barPos-ideal;
+    if(step%2===0){evenSum+=offset;evenCount++;}
+    else{oddSum+=offset;oddCount++;}
+  });
+  const swingPct=oddCount>0&&evenCount>0
+    ?Math.min(33,Math.round(Math.abs(oddSum/oddCount-evenSum/evenCount)/stepDur*100)):0;
+
+  const density=hits.filter(Boolean).length/16;
+  return{hits,density,swing:swingPct};
+}
+
+// ═══════════════════════════════════════
+// TIMBRE DETECTION
+// ═══════════════════════════════════════
+function detectTimbre(){
+  // Full spectrum
+  const mag=computeFFTMag(audioData.slice(0,Math.min(audioData.length,8192)));
+  const spectrum=mag;
+
+  // Sub energy (20-120Hz)
+  let subE=0,subCount=0,totalE=0;
+  for(let k=1;k<mag.length;k++){
+    const f=k*sampleRate/8192;
+    totalE+=mag[k];
+    if(f>=20&&f<=120){subE+=mag[k];subCount++;}
+  }
+  const sub=totalE>0?subE/totalE:0;
+
+  // Brightness (centroid)
+  let num=0,den=0;
+  for(let k=1;k<mag.length;k++){const f=k*sampleRate/8192;num+=f*mag[k];den+=mag[k];}
+  const brightness=den>0?Math.min(1,num/den/8000):0;
+
+  // Distortion estimate (odd harmonic ratio)
+  const freqBins=k=>Math.round(k*sampleRate/8192);
+  let harmRatio=0;
+  for(let h=3;h<=11;h+=2){
+    const root=freqBins(1);
+    if(root>0&&root*h<mag.length) harmRatio+=mag[root*h];
+  }
+  const distortion=Math.min(1,harmRatio/(mag[1]+.001)*.5);
+
+  // Wobble amount — variance of spectral centroid over time
+  const cents=analysis.centroids||[];
+  if(cents.length>1){
+    const mean=cents.reduce((a,b)=>a+b)/cents.length;
+    const variance=cents.reduce((a,b)=>a+(b-mean)**2,0)/cents.length;
+    var wobble=Math.min(1,Math.sqrt(variance)/2000);
+  } else var wobble=0;
+
+  return{brightness,distortion,sub,wobble,spectrum};
+}
+
+// ═══════════════════════════════════════
+// RENDER ALL RESULTS
+// ═══════════════════════════════════════
+function renderAll(){
+  const a=analysis;
+  // Metrics
+  document.getElementById('resBPM').textContent=a.bpm?.toFixed(1)||'—';
+  document.getElementById('resBPMsub').textContent=a.bpmConf?(a.bpmConf*100).toFixed(0)+'% confidence':'';
+  document.getElementById('resRoot').textContent=a.root||'—';
+  document.getElementById('resRootSub').textContent=a.scale||'';
+  document.getElementById('resLFO').textContent=a.lfoHz?.toFixed(1)+'Hz'||'—';
+  document.getElementById('resLFOsub').textContent=a.lfoSync==='FREE'?'free rate':'≈ '+a.lfoSync+' sync';
+
+  // Pitch panel
+  document.getElementById('pRoot').textContent=a.root||'—';
+  document.getElementById('pScale').textContent=a.scale||'—';
+  document.getElementById('pConf').textContent=a.pitchConf?Math.round(a.pitchConf*100)+'%':'—';
+  document.getElementById('pConfBar').style.width=Math.round((a.pitchConf||0)*100)+'%';
+
+  // Filter panel
+  document.getElementById('fLFO').textContent=a.lfoHz?.toFixed(2)+'Hz'||'—';
+  document.getElementById('fSync').textContent=a.lfoSync||'—';
+  document.getElementById('fCut').textContent=a.cutoffEst?Math.round(a.cutoffEst)+'Hz':'—';
+  document.getElementById('fType').textContent=a.filtType||'—';
+
+  // Rhythm
+  document.getElementById('rDens').textContent=a.density?Math.round(a.density*100)+'%':'—';
+  document.getElementById('rSwing').textContent=a.swing!==undefined?a.swing+'%':'—';
+  document.getElementById('rTime').textContent='4/4';
+
+  // Timbre
+  document.getElementById('tBright').textContent=a.brightness?pct(a.brightness):'—';
+  document.getElementById('tDist').textContent=a.distortion!==undefined?pct(a.distortion):'—';
+  document.getElementById('tSub').textContent=a.subEnergy!==undefined?pct(a.subEnergy):'—';
+  document.getElementById('tWobble').textContent=a.wobbleAmt!==undefined?pct(a.wobbleAmt):'—';
+
+  // Note pills
+  const noteNames=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  const pills=document.getElementById('notesPills'); pills.innerHTML='';
+  const chroma=a.chroma||[];
+  const colors=['var(--g)','var(--pu)','var(--a)','var(--bl)','var(--cy)'];
+  const sorted=Array.from({length:12},(_,i)=>({i,v:chroma[i]||0})).sort((a,b)=>b.v-a.v);
+  sorted.slice(0,5).forEach((item,rank)=>{
+    if(item.v<.2) return;
+    const p=document.createElement('div'); p.className='pill';
+    p.style.color=colors[rank]; p.style.borderColor=colors[rank];
+    p.textContent=noteNames[item.i]+' '+Math.round(item.v*100)+'%';
+    pills.appendChild(p);
+  });
+
+  // Rhythm grid
+  const rg=document.getElementById('rhythmGrid'); rg.innerHTML='';
+  (a.hits||[]).forEach((on,i)=>{
+    const d=document.createElement('div');
+    d.className='rs '+(on?'on':'off');
+    d.style.background=on?(i%4===0?'var(--r)':'var(--g)'):'var(--bdr2)';
+    d.style.borderRadius='2px';
+    d.title='Step '+(i+1);
+    rg.appendChild(d);
+  });
+
+  // Draw canvases
+  drawWaveform();
+  drawChroma();
+  drawCentroid();
+  drawSpectrum();
+  drawFullSpectrum();
+
+  // Export infos
+  document.getElementById('voiceExportInfo').textContent=
+    `Cutoff≈${Math.round(a.cutoffEst||500)}Hz · LFO ${(a.lfoHz||4).toFixed(1)}Hz${a.lfoSync!=='FREE'?' ('+a.lfoSync+')':''} · ${a.scale||'MINOR'}`;
+  document.getElementById('patternExportInfo').textContent=
+    `Root: ${a.root||'F'} · ${(a.bpm||174).toFixed(1)}BPM · ${(a.density||.5)*100|0}% density`;
+}
+
+function pct(v){return Math.round(v*100)+'%'}
+
+// ═══════════════════════════════════════
+// CANVAS DRAWS
+// ═══════════════════════════════════════
+function drawWaveform(){
+  const cv=document.getElementById('wfCv');
+  const W=cv.width=cv.offsetWidth*(window.devicePixelRatio||1);
+  const H=cv.height=160; cv.style.height='80px';
+  const c=cv.getContext('2d');
+  c.fillStyle='#0a0a0a'; c.fillRect(0,0,W,H);
+  // Waveform
+  const step=Math.ceil(audioData.length/W);
+  c.beginPath(); c.strokeStyle='#1D9E75'; c.lineWidth=1;
+  for(let x=0;x<W;x++){
+    let mn=1,mx=-1;
+    for(let j=0;j<step;j++){const s=audioData[x*step+j]||0;mn=Math.min(mn,s);mx=Math.max(mx,s);}
+    const y1=H/2-mx*H/2*.9,y2=H/2-mn*H/2*.9;
+    x===0?c.moveTo(x,y1):c.lineTo(x,y1); c.lineTo(x,y2);
+  }
+  c.stroke();
+  // Onset markers
+  onsetTimes.forEach(t=>{
+    const x=t/duration*W;
+    c.strokeStyle='rgba(255,43,85,.6)'; c.lineWidth=1;
+    c.beginPath(); c.moveTo(x,0); c.lineTo(x,H); c.stroke();
+  });
+}
+
+function drawChroma(){
+  const cv=document.getElementById('chromaCv');
+  const W=cv.width=cv.offsetWidth*(window.devicePixelRatio||1);
+  const H=cv.height=104; cv.style.height='52px';
+  const c=cv.getContext('2d');
+  c.fillStyle='#0a0a0a'; c.fillRect(0,0,W,H);
+  const notes=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  const chroma=analysis.chroma||[];
+  const bw=W/12;
+  chroma.forEach((v,i)=>{
+    const isRoot=notes[i]===analysis.root;
+    const h=v*(H-8);
+    c.fillStyle=isRoot?'var(--pu)':'rgba(168,85,247,.4)';
+    c.fillRect(i*bw+1,H-h-2,bw-2,h);
+    c.fillStyle=isRoot?'#fff':'rgba(255,255,255,.4)';
+    c.font=`${9*(window.devicePixelRatio||1)}px Share Tech Mono`;
+    c.fillText(notes[i],i*bw+2,H-2);
+  });
+}
+
+function drawCentroid(){
+  const cv=document.getElementById('centCv');
+  const W=cv.width=cv.offsetWidth*(window.devicePixelRatio||1);
+  const H=cv.height=104; cv.style.height='52px';
+  const c=cv.getContext('2d');
+  c.fillStyle='#0a0a0a'; c.fillRect(0,0,W,H);
+  const cents=analysis.centroids||[];
+  if(!cents.length) return;
+  const mn=Math.min(...cents),mx=Math.max(...cents);
+  c.beginPath(); c.strokeStyle='var(--a)'; c.lineWidth=2;
+  cents.forEach((v,i)=>{
+    const x=i/cents.length*W;
+    const y=H-4-(v-mn)/(mx-mn+1)*(H-8);
+    i===0?c.moveTo(x,y):c.lineTo(x,y);
+  });
+  c.stroke();
+  c.lineTo(W,H); c.lineTo(0,H); c.closePath();
+  c.fillStyle='rgba(255,170,0,.1)'; c.fill();
+}
+
+function drawSpectrum(){
+  const cv=document.getElementById('specCv');
+  const W=cv.width=cv.offsetWidth*(window.devicePixelRatio||1);
+  const H=cv.height=104; cv.style.height='52px';
+  const c=cv.getContext('2d');
+  c.fillStyle='#0a0a0a'; c.fillRect(0,0,W,H);
+  const spec=analysis.spectrum||[];
+  if(!spec.length) return;
+  const maxV=Math.max(...spec);
+  const bw=W/Math.min(spec.length,256);
+  for(let i=0;i<Math.min(spec.length,256);i++){
+    const h=(spec[i]/maxV)*(H-4);
+    const freq=i*sampleRate/8192;
+    const hue=freq<120?160:freq<500?80:freq<2000?40:0;
+    c.fillStyle=`hsl(${hue},80%,${40+h/H*30}%)`;
+    c.fillRect(i*bw,H-h,bw-1,h);
+  }
+}
+
+function drawFullSpectrum(){
+  const cv=document.getElementById('fullSpecCv');
+  const W=cv.width=cv.offsetWidth*(window.devicePixelRatio||1);
+  const H=cv.height=200; cv.style.height='100px';
+  const c=cv.getContext('2d');
+  c.fillStyle='#0a0a0a'; c.fillRect(0,0,W,H);
+  const spec=analysis.spectrum||[];
+  if(!spec.length) return;
+  const maxV=Math.max(...spec.slice(0,spec.length/4));
+  // Log frequency scale
+  const fMin=20,fMax=Math.min(20000,sampleRate/2);
+  for(let x=0;x<W;x++){
+    const frac=x/W;
+    const freq=fMin*Math.pow(fMax/fMin,frac);
+    const bin=Math.round(freq*8192/sampleRate);
+    if(bin>=spec.length) continue;
+    const h=Math.min(H-2,(spec[bin]/(maxV||1))*(H-2));
+    const hue=frac<.1?160:frac<.3?120:frac<.6?60:frac<.85?30:0;
+    c.fillStyle=`hsl(${hue},70%,45%)`;
+    c.fillRect(x,H-h,1,h);
+  }
+  // Frequency labels
+  [50,100,200,500,1000,2000,5000,10000].forEach(f=>{
+    const x=Math.log(f/fMin)/Math.log(fMax/fMin)*W;
+    c.strokeStyle='rgba(255,255,255,.1)'; c.lineWidth=1;
+    c.beginPath(); c.moveTo(x,0); c.lineTo(x,H); c.stroke();
+    c.fillStyle='rgba(255,255,255,.3)';
+    c.font=`${8*(window.devicePixelRatio||1)}px Share Tech Mono`;
+    c.fillText(f>=1000?(f/1000)+'k':f,x+2,H-3);
+  });
+  // Mark LFO + cutoff
+  const cut=analysis.cutoffEst||500;
+  const cx=Math.log(cut/fMin)/Math.log(fMax/fMin)*W;
+  c.strokeStyle='rgba(255,170,0,.6)'; c.lineWidth=2; c.setLineDash([4,4]);
+  c.beginPath(); c.moveTo(cx,0); c.lineTo(cx,H); c.stroke();
+  c.setLineDash([]);
+  c.fillStyle='rgba(255,170,0,.8)';
+  c.fillText('≈cutoff',cx+3,16);
+}
+
+// ═══════════════════════════════════════
+// EXPORT
+// ═══════════════════════════════════════
+function exportVoice(){
+  const a=analysis;
+  const lfoSync=a.lfoSync==='FREE'?'FREE':'1/'+a.lfoSync.split('/')[1];
+  const text=`// VOICE MODULE SETTINGS — detected from ${fileName}
+// Paste these values into the Voice Module manually
+
+Root: ${a.root} (${a.scale})
+Filter Cutoff: ~${Math.round(a.cutoffEst||500)}Hz
+Filter Resonance: ${a.wobbleAmt>.5?'HIGH (8-14)':'MEDIUM (4-8)'}
+LFO Target: CUTOFF
+LFO Rate: ${(a.lfoHz||4).toFixed(2)}Hz${a.lfoSync!=='FREE'?' ≈ '+a.lfoSync+' sync':''}
+LFO Depth: ${Math.round((a.wobbleAmt||.5)*100)}%
+Distortion: ${a.distortion>.4?'SOFT or HARD':'OFF'}
+Sub Energy: ${pct(a.subEnergy||0)}
+Brightness: ${pct(a.brightness||0)}
+
+Suggested wave: ${a.distortion>.4?'SAWTOOTH':'SINE or SAW'}
+Suggested LFO wave: ${a.lfoHz>8?'SQUARE':'SINE or SAW↘'}`;
+
+  showExport(text);
+}
+
+function exportPattern(){
+  const a=analysis;
+  const text=`// SEQ MODULE PATTERN — detected from ${fileName}
+
+Root: ${a.root}
+Scale: ${a.scale}
+BPM: ${(a.bpm||174).toFixed(1)}
+Density: ${Math.round((a.density||.5)*100)}%
+Swing: ${a.swing||0}%
+
+Hit pattern (16 steps):
+${(a.hits||[]).map((h,i)=>h?'■':'·').join(' ')}
+Steps: ${(a.hits||[]).map((h,i)=>h?i+1:null).filter(Boolean).join(', ')}`;
+
+  showExport(text);
+}
+
+function exportAll(){
+  const a=analysis;
+  const json={
+    source:fileName,
+    bpm:a.bpm,bpmConf:Math.round((a.bpmConf||0)*100),
+    root:a.root,scale:a.scale,pitchConf:Math.round((a.pitchConf||0)*100),
+    lfoHz:a.lfoHz,lfoSync:a.lfoSync,cutoffEstHz:Math.round(a.cutoffEst||500),
+    filtType:a.filtType,
+    hits:a.hits,density:Math.round((a.density||0)*100),swing:a.swing,
+    brightness:Math.round((a.brightness||0)*100),
+    distortion:Math.round((a.distortion||0)*100),
+    subEnergy:Math.round((a.subEnergy||0)*100),
+    wobbleAmt:Math.round((a.wobbleAmt||0)*100),
+  };
+  showExport(JSON.stringify(json,null,2));
+}
+
+function showExport(text){
+  const el=document.getElementById('exportOutput');
+  el.style.display='block'; el.textContent=text;
+  navigator.clipboard?.writeText(text).then(()=>{
+    document.getElementById('statusEl').textContent='// Copied to clipboard!';
+  });
+}
+</script>
+</body>
+</html>

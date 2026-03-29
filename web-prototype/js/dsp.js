@@ -42,18 +42,28 @@ class WobblerVoice {
       adsr:   { attack:0.005, decay:0.25, sustain:0.4, release:0.12, atkCurve:0, decCurve:0, relCurve:0 },
       lfos:   Array.from({length:5}, (_,i) => ({
         waveform:'sine', rate:4, depth:0, phase:0, bpmSync:false, syncDiv:4,
-        target:'cutoff', envA:0, envR:0, _enabled: i < 2,
+        target:'cutoff', envA:0, envR:0, _enabled: false,
         ...(i===4 ? {metaTarget:null, metaTargetLFO:0} : {})
       })),
       dist: { form:'soft', drive:0, tone:18000, mix:0, volume:1, bypassed:false },
       eq:   { lowGain:0, midGain:0, highGain:0, lowFreq:200, midFreq:1000, highFreq:6000, bypassed:false },
       fx:   { reverbMix:0, reverbDecay:2.0, delayMix:0, delayTime:0.375, delayFB:0.4, bypassed:false },
       filter: { type:'lowpass', cutoff:800, resonance:5, envAmount:2000, mix:1, bypassed:false },
+      osc1Active: id === 0,
+      osc2Active: id === 1,
+      subActive:  id === 2,
+      osc1ModTarget: 'none',
+      osc1ModDepth:  0.5,
+      osc2ModTarget: 'none',
+      osc2ModDepth:  0.5,
+      osc1LfoPitch:  false,
+      osc2: { waveform:'sine', oct:0, semi:0, detune:7, cents:0, volume:0.5, unison:1, unisonDetune:10 },
+      sub:  { waveform:'sine', oct:-2, cents:0, volume:0.6 },
       volume:0.8, pan:0, mute:false,
       twe: {
-        chaos: 0, ratemod: false, barsTotal: 4, tweAmt: 1,
+        chaos: 0, ratemod: false, barsTotal: 4, tweAmt: 1, _bypassed: true,
         main: {
-          rate:2, depth:200, attack:0, decay:0, target:'cutoff', shape:'sine', bpmSync:false, syncDiv:4, triplet:false, dotted:false, _enabled:true,
+          rate:2, depth:0, attack:0, decay:0, target:'cutoff', shape:'sine', bpmSync:false, syncDiv:4, triplet:false, dotted:false, _enabled:true,
           strike: { rate:8,  depth:0, attack:0, decay:0.4, startBar:0, target:'noiseAmt', shape:'sine', bpmSync:false, syncDiv:8,  triplet:false, dotted:false, _enabled:true },
           body:   { rate:4,  depth:0, attack:0, decay:0,   startBar:0, target:'cutoff',   shape:'sine', bpmSync:false, syncDiv:4,  triplet:false, dotted:false, _enabled:true },
           tail:   { rate:2,  depth:0, attack:0, decay:0.6, startBar:0, target:'pitch',    shape:'sine', bpmSync:false, syncDiv:2,  triplet:false, dotted:false, _enabled:true },
@@ -71,6 +81,9 @@ class WobblerVoice {
 
     this.analyser = ctx.createAnalyser();
     this.analyser.fftSize = 2048; this.analyser.smoothingTimeConstant = 0.6;
+
+    this.preAnalyser = ctx.createAnalyser();
+    this.preAnalyser.fftSize = 512; this.preAnalyser.smoothingTimeConstant = 0.6;
 
     // Distortion chain nodes
     this._distPre  = ctx.createGain();  this._distPre.gain.value  = 1;
@@ -92,11 +105,13 @@ class WobblerVoice {
     //       ↘ filterDry ↗
     this._tremoloGain = ctx.createGain(); this._tremoloGain.gain.value = 1;
     this._distPre.connect(this._distNode);
+    this._distPre.connect(this._distDry);
     this._distNode.connect(this._distTone);
     this._distTone.connect(this._distPost);
     this._distPost.connect(this._distWet);
-    this._distWet.connect(this.filter);
-    this._distDry.connect(this.filter);
+    this._distWet.connect(this.preAnalyser);
+    this._distDry.connect(this.preAnalyser);
+    this.preAnalyser.connect(this.filter);
     this.filter.connect(this.filterWet);
     this.filterWet.connect(this.envGain);
     this.filterDry.connect(this.envGain);
@@ -157,31 +172,13 @@ class WobblerVoice {
     this._tweAuxOscs = []; // dynamic aux lane oscillators
     this._tweStrikeOsc = null; this._tweTailOsc = null;
 
-    // Persistent audio oscillators — always running, no start/stop per note
-    // Frequency/type updated on noteOn. Envelope gain handles amplitude.
-    this._mainOsc  = ctx.createOscillator();
-    this._mainOscG = ctx.createGain(); this._mainOscG.gain.value = 0;
-    this._mainUniPanner = ctx.createStereoPanner(); this._mainUniPanner.pan.value = 0;
-    this._mainOsc.type = 'sawtooth';
-    this._mainOsc.connect(this._mainOscG);
-    this._mainOscG.connect(this._mainUniPanner);
-    this._mainUniPanner.connect(this._distPre); this._mainUniPanner.connect(this._distDry); this._mainUniPanner.connect(this.filterDry);
-
-    this._pulseOsc  = ctx.createOscillator();
-    this._pulseOscG = ctx.createGain(); this._pulseOscG.gain.value = 0;
-    this._pulseUniPanner = ctx.createStereoPanner(); this._pulseUniPanner.pan.value = 0;
-    this._pulseOsc.connect(this._pulseOscG);
-    this._pulseOscG.connect(this._pulseUniPanner);
-    this._pulseUniPanner.connect(this._distPre); this._pulseUniPanner.connect(this._distDry); this._pulseUniPanner.connect(this.filterDry);
-
-    this._ssG = ctx.createGain(); this._ssG.gain.value = 0;
-    this._ssOscBank = [-10.5,-7,-3.5,0,3.5,7,10.5].map((baseSpread, i) => {
-      const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = 440;
-      const g = ctx.createGain(); g.gain.value = i === 3 ? 0.25 : 0.12;
-      o.connect(g); g.connect(this._ssG);
-      return { osc: o, gain: g, baseSpread };
-    });
-    this._ssG.connect(this._distPre); this._ssG.connect(this._distDry); this._ssG.connect(this.filterDry);
+    // Per-note oscillators — created by buildOscChain on each noteOn
+    this._activeOscs     = [];
+    this._activeSubOsc   = null;
+    this._activeOsc1Envs = [];
+    this._activeOsc2Envs = [];
+    this._activeSubEnv   = null;
+    this._liveOsc        = null;
 
     this._noiseG = ctx.createGain(); this._noiseG.gain.value = 0;
     // Noise filter mix: _noiseToFilt controls how much noise enters the filter chain;
@@ -195,18 +192,10 @@ class WobblerVoice {
     this._noiseFilterBypass.connect(this.envGain);
     this._noiseNode = null; // created + started in startLFOs()
 
-    // Unison extra oscillators: up to 7 additional voices (+ _mainOsc = 8 total)
-    // Each has its own StereoPanner for stereo spread
-    this._unisonExtraOscs = Array.from({length: 7}, () => {
-      const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = 440;
-      const g = ctx.createGain(); g.gain.value = 0;
-      const pan = ctx.createStereoPanner(); pan.pan.value = 0;
-      o.connect(g); g.connect(pan);
-      pan.connect(this._distPre); pan.connect(this._distDry); pan.connect(this.filterDry);
-      return { osc: o, gain: g, panner: pan };
-    });
-
     this._srcs = []; this._playing = false; // legacy compat
+
+    // New breakpoint LFO engine — starts on first noteOn
+    this.lfoEngine = new LFOEngine(this);
   }
 
   _distCurve(form, drive) {
@@ -287,35 +276,15 @@ class WobblerVoice {
     return { centerVol: vol * norm, sideVol: vol * b * norm };
   }
 
-  // Re-applies detune spread + stereo pan + blend to all active unison voices at time t
-  _applyUnisonDetune(t) {
-    const p = this.p, now = t || this.ctx.currentTime;
-    if (p.osc.waveform === 'supersaw') return; // supersaw has its own spread
-    const uni = Math.max(1, Math.round(p.osc.unison || 1));
-    const spread = p.osc.spread ?? 0.5;
-    const vol = p.osc.volume * (this._noteVelocity || 0.65);
-    const { centerVol, sideVol } = this._unisonVols(uni, p.osc.unisonBlend, vol);
-    const isPulse = p.osc.waveform === 'pulse';
-    const mainGain   = isPulse ? this._pulseOscG     : this._mainOscG;
-    const mainOsc    = isPulse ? this._pulseOsc      : this._mainOsc;
-    const mainPanner = isPulse ? this._pulseUniPanner : this._mainUniPanner;
-    mainOsc.detune.setTargetAtTime(this._unisonCentOffset(0, uni, p.osc.cent, p.osc.unisonDetune), now, 0.01);
-    mainGain.gain.setTargetAtTime(centerVol, now, 0.01);
-    if (mainPanner) mainPanner.pan.setTargetAtTime(this._unisonPanPos(0, uni, spread), now, 0.01);
-    this._unisonExtraOscs.forEach((u, i) => {
-      const active = (i + 1) < uni;
-      u.osc.detune.setTargetAtTime(this._unisonCentOffset(i + 1, uni, p.osc.cent, p.osc.unisonDetune), now, 0.01);
-      u.gain.gain.setTargetAtTime(active ? sideVol : 0, now, 0.01);
-      if (u.panner) u.panner.pan.setTargetAtTime(active ? this._unisonPanPos(i + 1, uni, spread) : 0, now, 0.01);
-    });
-  }
+  // Unison is now applied per-note in buildOscChain — this is a no-op kept for compat
+  _applyUnisonDetune(_t) {}
 
   // Connects a gain node to all active side-voice detune AudioParams (for 'chorus' target)
   _connectChorusNode(gainNode) {
     try { gainNode.disconnect(); } catch(_) {}
-    const uni = Math.max(1, Math.round(this.p.osc.unison || 1));
-    this._unisonExtraOscs.forEach((u, i) => {
-      if ((i + 1) < uni) try { gainNode.connect(u.osc.detune); } catch(_) {}
+    // Connect to side voices (all active oscs except the first = center)
+    (this._activeOscs || []).forEach((o, i) => {
+      if (i > 0) try { gainNode.connect(o.detune); } catch(_) {}
     });
   }
 
@@ -337,16 +306,9 @@ class WobblerVoice {
   // supersaw bank and all unison voices are modulated equally.
   _tweConnectGain(gainNode, target) {
     if (target === 'pitch') {
-      const wf = this.p.osc.waveform;
-      if (wf === 'supersaw') {
-        this._ssOscBank?.forEach(u => { try { gainNode.connect(u.osc.detune); } catch(_) {} });
-      } else {
-        [this._mainOsc, this._pulseOsc].forEach(o => {
-          if (o) try { gainNode.connect(o.detune); } catch(_) {}
-        });
-        this._unisonExtraOscs?.forEach(u => { try { gainNode.connect(u.osc.detune); } catch(_) {} });
-      }
-      return true;
+      (this._activeOscs || []).forEach(o => { try { gainNode.connect(o.detune); } catch(_) {} });
+      if (this._activeSubOsc) { try { gainNode.connect(this._activeSubOsc.detune); } catch(_) {} }
+      return (this._activeOscs || []).length > 0;
     }
     if (target === 'chorus') {
       this._connectChorusNode(gainNode);
@@ -749,11 +711,6 @@ class WobblerVoice {
     this.tweMain.osc.start(t);
     this.tweBody.osc.start(t);
     this._tweAuxOscs.forEach(a => { try { a.osc.start(t); } catch(_) {} });
-    // Start persistent audio oscillators
-    this._mainOsc.start(t);
-    this._pulseOsc.start(t);
-    this._ssOscBank.forEach(s => s.osc.start(t));
-    this._unisonExtraOscs.forEach(u => u.osc.start(t));
     // Persistent noise source
     const nn = this.ctx.createBufferSource();
     nn.buffer = this._noiseBuf(); nn.loop = true;
@@ -809,74 +766,81 @@ class WobblerVoice {
     const ctx = this.ctx, now = ctx.currentTime, p = this.p;
     this._midiFreq = freq;
     const f = freq * Math.pow(2, p.osc.pitch / 12);
-    const vol = p.osc.volume * velocity;
 
-    // Cancel all osc gain schedules — including any post-release silencing queued by noteOff
-    this._mainOscG.gain.cancelScheduledValues(now);  this._mainOscG.gain.setValueAtTime(0, now);
-    this._pulseOscG.gain.cancelScheduledValues(now); this._pulseOscG.gain.setValueAtTime(0, now);
-    this._ssG.gain.cancelScheduledValues(now);       this._ssG.gain.setValueAtTime(0, now);
-    this._unisonExtraOscs.forEach(u => {
-      u.gain.gain.cancelScheduledValues(now);
-      u.gain.gain.setValueAtTime(u.gain.gain.value, now);
-    });
+    // Stop + clean up previous note's oscillators
+    stopOscs(this._activeOscs, this._activeSubOsc, now + 0.01);
+    this._activeOscs = []; this._activeSubOsc = null;
+    this._activeOsc1Envs = []; this._activeOsc2Envs = []; this._activeSubEnv = null;
 
-    if (p.osc.waveform === 'supersaw') {
-      this._ssOscBank.forEach((s, i) => {
-        s.osc.frequency.setTargetAtTime(f, now, 0.003);
-        s.osc.detune.value = p.osc.cent + s.baseSpread * p.osc.spread * 2;
-      });
-      this._ssG.gain.setTargetAtTime(vol, now, 0.002);
-      this._currentOscFreq = this._ssOscBank[3].osc.frequency;
-      this._currentOscDetune = this._ssOscBank[3].osc.detune;
-      this._liveOsc = this._ssOscBank[3].osc;
-      this._currentOscGain = this._ssG.gain;
-    } else if (p.osc.waveform === 'pulse') {
-      const uni = Math.max(1, Math.round(p.osc.unison || 1));
-      const pw = this._makePulseWave(p.osc.pw);
-      const uniVol = vol / Math.sqrt(uni);
-      this._pulseOsc.setPeriodicWave(pw);
-      const pulseSpread = p.osc.spread ?? 0.5;
-      const { centerVol: pCtrVol, sideVol: pSideVol } = this._unisonVols(uni, p.osc.unisonBlend, uniVol * Math.sqrt(uni));
-      this._pulseOsc.frequency.setTargetAtTime(f, now, 0.003);
-      this._pulseOsc.detune.value = this._unisonCentOffset(0, uni, p.osc.cent, p.osc.unisonDetune);
-      this._pulseOscG.gain.setTargetAtTime(pCtrVol, now, 0.002);
-      if (this._pulseUniPanner) this._pulseUniPanner.pan.setValueAtTime(this._unisonPanPos(0, uni, pulseSpread), now);
-      this._unisonExtraOscs.forEach((u, i) => {
-        u.osc.setPeriodicWave(pw);
-        u.osc.frequency.setTargetAtTime(f, now, 0.003);
-        u.osc.detune.value = this._unisonCentOffset(i + 1, uni, p.osc.cent, p.osc.unisonDetune);
-        const active = (i + 1) < uni;
-        u.gain.gain.setTargetAtTime(active ? pSideVol : 0, now, 0.002);
-        if (u.panner) u.panner.pan.setValueAtTime(active ? this._unisonPanPos(i + 1, uni, pulseSpread) : 0, now);
-      });
-      this._currentOscFreq = this._pulseOsc.frequency;
-      this._currentOscDetune = this._pulseOsc.detune;
-      this._liveOsc = this._pulseOsc;
-      this._currentOscGain = this._pulseOscG.gain;
-    } else {
-      const uni = Math.max(1, Math.round(p.osc.unison || 1));
-      const uniVol = vol / Math.sqrt(uni);
-      this._mainOsc.type = p.osc.waveform;
-      const mainSpread = p.osc.spread ?? 0.5;
-      const { centerVol: mCtrVol, sideVol: mSideVol } = this._unisonVols(uni, p.osc.unisonBlend, uniVol * Math.sqrt(uni));
-      this._mainOsc.frequency.setTargetAtTime(f, now, 0.003);
-      this._mainOsc.detune.value = this._unisonCentOffset(0, uni, p.osc.cent, p.osc.unisonDetune);
-      this._mainOscG.gain.setTargetAtTime(mCtrVol, now, 0.002);
-      if (this._mainUniPanner) this._mainUniPanner.pan.setValueAtTime(this._unisonPanPos(0, uni, mainSpread), now);
-      this._unisonExtraOscs.forEach((u, i) => {
-        u.osc.type = p.osc.waveform;
-        u.osc.frequency.setTargetAtTime(f, now, 0.003);
-        u.osc.detune.value = this._unisonCentOffset(i + 1, uni, p.osc.cent, p.osc.unisonDetune);
-        const active = (i + 1) < uni;
-        u.gain.gain.setTargetAtTime(active ? mSideVol : 0, now, 0.002);
-        if (u.panner) u.panner.pan.setValueAtTime(active ? this._unisonPanPos(i + 1, uni, mainSpread) : 0, now);
-      });
-      this._currentOscFreq = this._mainOsc.frequency;
-      this._currentOscDetune = this._mainOsc.detune;
-      this._liveOsc = this._mainOsc;
-      this._currentOscGain = this._mainOscG.gain;
-    }
+    // Build OSC chain via new engine
+    const oscParams = {
+      osc1: {
+        wave:   p.osc.waveform === 'pulse' ? 'square' : (p.osc.waveform === 'supersaw' ? 'sawtooth' : p.osc.waveform),
+        oct:    p.osc.pitch ? Math.round(p.osc.pitch / 12) : 0,
+        semi:   0,
+        det:    0,
+        cents:  p.osc.cent || 0,
+        vol:    p.osc.volume || 0.8,
+        voices: p.osc.unison || 1,
+        spread: p.osc.unisonDetune || 20,
+        width:  p.osc.spread ? p.osc.spread * 100 : 80,
+        ampA:   p.adsr.attack  * 1000,
+        ampD:   p.adsr.decay   * 1000,
+        ampS:   p.adsr.sustain,
+        ampR:   p.adsr.release * 1000,
+        modTarget: p.osc1ModTarget || 'none',
+        modDepth:  p.osc1ModDepth  || 0,
+        lfoPitch:  p.osc1LfoPitch  || false,
+      },
+      osc2: {
+        wave:   p.osc2?.waveform || 'sine',
+        oct:    p.osc2?.oct  || 0,
+        semi:   p.osc2?.semi || 0,
+        det:    p.osc2?.detune || 7,
+        cents:  p.osc2?.cents  || 0,
+        vol:    p.osc2?.volume || 0.5,
+        voices: p.osc2?.unison || 1,
+        spread: p.osc2?.unisonDetune || 10,
+        width:  80,
+        ampA:   p.adsr.attack  * 1000,
+        ampD:   p.adsr.decay   * 1000,
+        ampS:   p.adsr.sustain,
+        ampR:   p.adsr.release * 1000,
+        modTarget: p.osc2ModTarget || 'none',
+        modDepth:  p.osc2ModDepth  || 0,
+        lfoPitch:  false,
+      },
+      sub: {
+        wave:   p.sub?.waveform || 'sine',
+        oct:    p.sub?.oct ?? -2,
+        cents:  p.sub?.cents || 0,
+        vol:    p.sub?.volume || 0.6,
+        ampA: 2, ampD: 80, ampS: 0.9, ampR: 60,
+        lfoPitch: false,
+      },
+      noise:       { vol: p.noise.volume || 0, type: p.noise.type || 'white' },
+      osc1Active:  p.osc1Active !== false,
+      osc2Active:  p.osc2Active === true,
+      subActive:   p.subActive  === true,
+      lfoGain_pitch: null,
+      osc1LfoPitch:  p.osc1LfoPitch || false,
+      osc2LfoPitch:  false,
+      subLfoPitch:   false,
+    };
 
+    const { oscs, subOscNode, osc1Envs, osc2Envs, subEnv } =
+      buildOscChain(ctx, f, now, this._distPre, oscParams);
+
+    applyOscEnvs(now, osc1Envs, osc2Envs, subEnv, oscParams);
+
+    this._activeOscs     = oscs;
+    this._activeSubOsc   = subOscNode;
+    this._activeOsc1Envs = osc1Envs;
+    this._activeOsc2Envs = osc2Envs;
+    this._activeSubEnv   = subEnv;
+
+    // Keep _liveOsc pointing to first osc for LFO pitch routing + bend
+    this._liveOsc = oscs[0] || null;
     this._baseFreq = f; this._noteVelocity = velocity; this._playing = true;
     this._noteOnTime = now;
 
@@ -891,7 +855,7 @@ class WobblerVoice {
       const lp = this.p.lfos[i];
       const t = lp.target;
       if (lp._enabled === false) { try { lfo.gain.disconnect(); } catch(_){} continue; }
-      if (t === 'pitch')    { try { lfo.gain.disconnect(); } catch(_){} lfo.gain.connect(this._liveOsc.detune); lfo.connected = 'pitch'; }
+      if (t === 'pitch' && this._liveOsc)    { try { lfo.gain.disconnect(); } catch(_){} lfo.gain.connect(this._liveOsc.detune); lfo.connected = 'pitch'; }
       if (t === 'noiseAmt') { try { lfo.gain.disconnect(); } catch(_){} lfo.gain.connect(this._noiseG.gain);    lfo.connected = 'noiseAmt'; }
       if (t === 'chorus')   { this._connectChorusNode(lfo.gain); lfo.connected = 'chorus'; }
       // LFO envelope: if envA > 0 ramp depth in from 0 over attack
@@ -936,6 +900,12 @@ class WobblerVoice {
     fc.linearRampToValueAtTime(peak, now + Math.max(0.001, p.adsr.attack));
     fc.setTargetAtTime(base + (peak - base) * p.adsr.sustain, now + p.adsr.attack, p.adsr.decay / 4);
 
+    // LFO engine — phase-reset on note trigger
+    if (this.lfoEngine) {
+      this.lfoEngine.resetPhases();
+      if (!this.lfoEngine.playing) this.lfoEngine.start();
+    }
+
     this._tweNoteOn(velocity);
   }
 
@@ -943,12 +913,8 @@ class WobblerVoice {
     if (!this._baseFreq) return;
     const f = this._baseFreq * Math.pow(2, cents / 1200);
     const t = this.ctx.currentTime;
-    if (this.p.osc.waveform === 'supersaw') {
-      this._ssOscBank.forEach(s => s.osc.frequency.setTargetAtTime(f, t, 0.01));
-    } else if (this._currentOscFreq) {
-      this._currentOscFreq.setTargetAtTime(f, t, 0.01);
-      this._unisonExtraOscs.forEach(u => u.osc.frequency.setTargetAtTime(f, t, 0.01));
-    }
+    (this._activeOscs || []).forEach(o => { try { o.frequency.setTargetAtTime(f, t, 0.01); } catch(_) {} });
+    if (this._activeSubOsc) { try { this._activeSubOsc.frequency.setTargetAtTime(f, t, 0.01); } catch(_) {} }
   }
 
   noteOff() {
@@ -961,13 +927,16 @@ class WobblerVoice {
     this._cancelAndHold(g, now);
     g.setValueAtTime(releaseFrom, now);
     g.linearRampToValueAtTime(0, now + rel);
-    // Silence osc gains after release completes (prevent leaking into next note)
-    const afterRel = now + rel + 0.05;
-    this._mainOscG.gain.setTargetAtTime(0, afterRel, 0.01);
-    this._pulseOscG.gain.setTargetAtTime(0, afterRel, 0.01);
-    this._ssG.gain.setTargetAtTime(0, afterRel, 0.01);
-    this._noiseG.gain.setTargetAtTime(0, afterRel, 0.01);
-    this._unisonExtraOscs.forEach(u => u.gain.gain.setTargetAtTime(0, afterRel, 0.01));
+    // Release new osc engine envs + schedule stop after release
+    const _oscP = {
+      osc1: { ampR: this.p.adsr.release * 1000 },
+      osc2: { ampR: this.p.adsr.release * 1000 },
+      sub:  { ampR: this.p.adsr.release * 1000 },
+    };
+    releaseOscEnvs(now, this._activeOsc1Envs, this._activeOsc2Envs, this._activeSubEnv, _oscP);
+    const stopAt = now + rel + 0.1;
+    stopOscs(this._activeOscs, this._activeSubOsc, stopAt);
+    this._noiseG.gain.setTargetAtTime(0, now + rel + 0.05, 0.01);
     this.filter.frequency.setTargetAtTime(p.filter.cutoff, now, rel / 3);
     for (let i = 0; i < this.lfoNodes.length; i++) {
       const lfo = this.lfoNodes[i];
@@ -992,31 +961,13 @@ class WobblerVoice {
     this._heldSlots.add(slotIdx);
     const t = this.ctx.currentTime;
     const f = freq * Math.pow(2, this.p.osc.pitch / 12);
-    const vol = this.p.osc.volume * vel;
 
     if (isFirst) {
-      // Full noteOn for first chord note — triggers ADSR + sets up all oscs
       this.noteOn(freq, vel);
     } else {
-      // Subsequent notes: just update the target slot's frequency
-      if (slotIdx === 0) {
-        const o = this.p.osc.waveform === 'pulse' ? this._pulseOsc : this._mainOsc;
-        o.frequency.setTargetAtTime(f, t, 0.003);
-        const g = this.p.osc.waveform === 'pulse' ? this._pulseOscG : this._mainOscG;
-        g.gain.setTargetAtTime(vol, t, 0.002);
-      } else if (slotIdx - 1 < this._unisonExtraOscs.length) {
-        const u = this._unisonExtraOscs[slotIdx - 1];
-        if (this.p.osc.waveform !== 'supersaw') {
-          if (this.p.osc.waveform === 'pulse') {
-            u.osc.setPeriodicWave(this._makePulseWave(this.p.osc.pw));
-          } else {
-            u.osc.type = this.p.osc.waveform;
-          }
-        }
-        u.osc.frequency.setTargetAtTime(f, t, 0.003);
-        u.osc.detune.value = 0; // no detune in chord mode
-        u.gain.gain.setTargetAtTime(vol, t, 0.002);
-      }
+      // Update frequency of the corresponding active osc slot
+      const osc = (this._activeOscs || [])[slotIdx];
+      if (osc) { try { osc.frequency.setTargetAtTime(f, t, 0.003); } catch(_) {} }
     }
   }
 
@@ -1024,12 +975,6 @@ class WobblerVoice {
   noteOffSlot(slotIdx) {
     if (!this._heldSlots) return;
     this._heldSlots.delete(slotIdx);
-    const t = this.ctx.currentTime;
-    // Silence the slot's oscillator
-    if (slotIdx > 0 && slotIdx - 1 < this._unisonExtraOscs.length) {
-      this._unisonExtraOscs[slotIdx - 1].gain.gain.setTargetAtTime(0, t, 0.02);
-    }
-    // If all slots released → trigger ADSR release
     if (this._heldSlots.size === 0) this.noteOff();
   }
 
@@ -1042,30 +987,26 @@ class WobblerVoice {
     const t = this.ctx.currentTime;
     if (section === 'osc') {
       this.p.osc[key] = val;
-      if (key === 'pitch' && this._currentOscFreq && this._midiFreq) {
+      if (key === 'pitch' && this._midiFreq) {
         const newFreq = this._midiFreq * Math.pow(2, val / 12);
-        this._currentOscFreq.setTargetAtTime(newFreq, t, 0.01);
-        this._unisonExtraOscs.forEach(u => u.osc.frequency.setTargetAtTime(newFreq, t, 0.01));
+        this._baseFreq = newFreq;
+        (this._activeOscs || []).forEach(o => { try { o.frequency.setTargetAtTime(newFreq, t, 0.01); } catch(_) {} });
+        if (this._activeSubOsc) { try { this._activeSubOsc.frequency.setTargetAtTime(newFreq, t, 0.01); } catch(_) {} }
       }
-      if (key === 'cent' || key === 'unisonDetune') {
-        this._applyUnisonDetune(t);
+      if (key === 'waveform') {
+        const webType = val === 'pulse' ? 'square' : val === 'supersaw' ? 'sawtooth' : val;
+        (this._activeOscs || []).forEach(o => {
+          try {
+            if (val === 'pulse') { o.setPeriodicWave(this._makePulseWave(this.p.osc.pw ?? 0.5)); }
+            else { o.type = webType; }
+          } catch(_) {}
+        });
       }
-      if (key === 'volume' && this._currentOscGain) {
-        this._applyUnisonDetune(t); // re-normalises per-voice gain
-      }
-      if (key === 'unison' || key === 'unisonBlend') {
-        this._applyUnisonDetune(t);
-      }
-      if (key === 'pw' && this._liveOsc && this.p.osc.waveform === 'pulse') {
-        this._liveOsc.setPeriodicWave(this._makePulseWave(val));
-      }
-      if (key === 'spread') {
-        if (this._ssOscBank && this.p.osc.waveform === 'supersaw') {
-          this._ssOscBank.forEach(({osc:o, baseSpread}) => {
-            o.detune.setTargetAtTime(this.p.osc.cent + baseSpread * val * 2, t, 0.01);
-          });
-        } else {
-          this._applyUnisonDetune(t); // also updates pan positions
+      if (key === 'pw') {
+        const pw = val ?? 0.5;
+        if (this.p.osc.waveform === 'pulse') {
+          const wave = this._makePulseWave(pw);
+          (this._activeOscs || []).forEach(o => { try { o.setPeriodicWave(wave); } catch(_) {} });
         }
       }
     }
@@ -1367,6 +1308,7 @@ class WobblerSynth {
     this.bpm = bpm;
     this.voices.forEach(v => {
       v._bpm = bpm;
+      if (v.lfoEngine) v.lfoEngine.bpm = bpm;
       v.p.lfos.forEach((lp,i) => {
         if (lp.bpmSync) v.lfoNodes[i].osc.frequency.setTargetAtTime((bpm/60)*lp.syncDiv/4, this.ctx.currentTime, 0.01);
       });
