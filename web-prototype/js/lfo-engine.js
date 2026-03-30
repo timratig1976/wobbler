@@ -46,23 +46,15 @@ class LFOEngine {
       breakpoints: [{ x:0, y:0.5, hard:false }, { x:1, y:0.5, hard:false }],
       bars:    2,
       mult:    1.333,   // ×2D default
-      target:  i === 0 ? 'cutoff' : 'none',
-      depth:   i === 0 ? 0.6 : 0,
+      target:  'none',
+      depth:   0,
       offset:  0,       // phase-offset (0..1) for call & response
       mode:    'normal', // normal | inverse | divide2 | divide3
       phase:   0,
-      enabled: i < 2,
-      presetName: i === 0 ? 'dnbsaw' : 'none',
+      enabled: false,
+      presetName: 'none',
     }));
 
-    // Load default preset for slot 0
-    if (typeof LFO_PRESET_LIBRARY !== 'undefined') {
-      const pts = LFO_PRESET_LIBRARY['dnbsaw'];
-      if (pts) {
-        this.slots[0].breakpoints = pts;
-        this.slots[0].points = bpBake(pts);
-      }
-    }
   }
 
   setSlotBreakpoints(slotIdx, breakpoints) {

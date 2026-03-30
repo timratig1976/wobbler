@@ -209,17 +209,28 @@ class WobblerVoice {
     });
     this._ssG.connect(this._distPre); this._ssG.connect(this._distDry); this._ssG.connect(this.filterDry);
 
-    this._noiseG = ctx.createGain(); this._noiseG.gain.value = 0;
-    // Noise filter mix: _noiseToFilt controls how much noise enters the filter chain;
-    // _noiseFilterBypass sends noise directly past the filter to envGain.
-    this._noiseToFilt      = ctx.createGain(); this._noiseToFilt.gain.value      = 1; // filterMix=1 default
-    this._noiseFilterBypass= ctx.createGain(); this._noiseFilterBypass.gain.value = 0; // filterMix=1 default
-    this._noiseG.connect(this._noiseToFilt);
+    // Noise chain: noiseNode → _noiseG(gain=1) → _noiseLvlGain(volume+LFO) → routing
+    this._noiseG = ctx.createGain(); this._noiseG.gain.value = 1;
+    this._noiseLvlGain = ctx.createGain(); this._noiseLvlGain.gain.value = 0;
+    this._noiseG.connect(this._noiseLvlGain);
+    this._noiseToFilt      = ctx.createGain(); this._noiseToFilt.gain.value      = 1;
+    this._noiseFilterBypass= ctx.createGain(); this._noiseFilterBypass.gain.value = 0;
+    this._noiseLvlGain.connect(this._noiseToFilt);
     this._noiseToFilt.connect(this._distPre);
     this._noiseToFilt.connect(this._distDry);
-    this._noiseG.connect(this._noiseFilterBypass);
+    this._noiseLvlGain.connect(this._noiseFilterBypass);
     this._noiseFilterBypass.connect(this.envGain);
-    this._noiseNode = null; // created + started in startLFOs()
+    this._noiseNode = null;
+
+    // Dedicated noise LFO: modulates _noiseLvlGain.gain
+    this._noiseLfoOsc  = ctx.createOscillator();
+    this._noiseLfoGain = ctx.createGain();
+    this._noiseLfoOsc.type = 'sine';
+    this._noiseLfoOsc.frequency.value = 0;
+    this._noiseLfoGain.gain.value = 0;
+    this._noiseLfoOsc.connect(this._noiseLfoGain);
+    this._noiseLfoGain.connect(this._noiseLvlGain.gain);
+    this._noiseLfoOsc.start();
 
     // Unison extra oscillators: up to 7 additional voices (+ _mainOsc = 8 total)
     // Each has its own StereoPanner for stereo spread
@@ -906,10 +917,13 @@ class WobblerVoice {
     this._baseFreq = f; this._noteVelocity = velocity; this._playing = true;
     this._noteOnTime = now;
 
-    // Noise — persistent node, just update gain
-    this._noiseG.gain.cancelScheduledValues(now);
-    this._noiseG.gain.setTargetAtTime(p.noise.volume * velocity, now, 0.002);
-    this._currentNoiseGain = this._noiseG.gain;
+    // Noise — apply envShape envelope; LFO stays persistent, no rate reset
+    this._applyNoiseEnv(p.noise.volume * velocity, p.noise.envShape, now, p.adsr);
+    this._currentNoiseGain = this._noiseLvlGain.gain;
+    if (this._noiseNode) {
+      const pr = Math.pow(2, (p.noise.pitch ?? 0) / 12);
+      this._noiseNode.playbackRate.setTargetAtTime(pr, now, 0.01);
+    }
 
     // LFO reconnection for pitch / noiseAmt targets + LFO envelope attack
     for (let i = 0; i < this.lfoNodes.length; i++) {
@@ -918,7 +932,7 @@ class WobblerVoice {
       const t = lp.target;
       if (lp._enabled === false) { try { lfo.gain.disconnect(); } catch(_){} continue; }
       if (t === 'pitch')    { try { lfo.gain.disconnect(); } catch(_){} lfo.gain.connect(this._liveOsc.detune); lfo.connected = 'pitch'; }
-      if (t === 'noiseAmt') { try { lfo.gain.disconnect(); } catch(_){} lfo.gain.connect(this._noiseG.gain);    lfo.connected = 'noiseAmt'; }
+      if (t === 'noiseAmt') { try { lfo.gain.disconnect(); } catch(_){} lfo.gain.connect(this._noiseLvlGain.gain); lfo.connected = 'noiseAmt'; }
       if (t === 'chorus')   { this._connectChorusNode(lfo.gain); lfo.connected = 'chorus'; }
       // LFO envelope: if envA > 0 ramp depth in from 0 over attack
       const applied = lp.target === 'cutoff' ? Math.min(lp.depth, Math.max(0, this.p.filter.cutoff - 20)) : lp.depth;
@@ -992,7 +1006,7 @@ class WobblerVoice {
     this._mainOscG.gain.setTargetAtTime(0, afterRel, 0.01);
     this._pulseOscG.gain.setTargetAtTime(0, afterRel, 0.01);
     this._ssG.gain.setTargetAtTime(0, afterRel, 0.01);
-    this._noiseG.gain.setTargetAtTime(0, afterRel, 0.01);
+    this._noiseLvlGain.gain.setTargetAtTime(0, afterRel, 0.01);
     this._unisonExtraOscs.forEach(u => u.gain.gain.setTargetAtTime(0, afterRel, 0.01));
     this.filter.frequency.setTargetAtTime(p.filter.cutoff, now, rel / 3);
     for (let i = 0; i < this.lfoNodes.length; i++) {
@@ -1059,6 +1073,32 @@ class WobblerVoice {
     if (this._heldSlots.size === 0) this.noteOff();
   }
 
+  _applyNoiseEnv(targetVol, envShape, now, adsr) {
+    const g = this._noiseLvlGain.gain;
+    const lfoRate = this.p.noise.lfoRate ?? 0;
+    const lfoDepth = lfoRate > 0 ? targetVol * 0.5 : 0;
+    this._noiseLfoGain.gain.setTargetAtTime(lfoDepth, now, 0.02);
+    const atk = Math.max(0.05, adsr?.attack  ?? 0.05);
+    const rel = Math.max(0.1,  adsr?.release ?? 0.12);
+    switch (envShape) {
+      case 'fade-up':
+        g.setValueAtTime(0, now);
+        g.linearRampToValueAtTime(targetVol, now + atk);
+        break;
+      case 'fade-down':
+        g.setValueAtTime(targetVol, now);
+        g.linearRampToValueAtTime(0, now + rel);
+        break;
+      case 'fade-out':
+        g.setValueAtTime(targetVol, now);
+        g.setTargetAtTime(0, now + atk * 0.5, rel * 0.5);
+        break;
+      default:
+        g.setTargetAtTime(targetVol, now, 0.005);
+        break;
+    }
+  }
+
   _killSrcs() {
     // Persistent oscs never stop — this is intentionally a no-op
     this._srcs.splice(0);
@@ -1082,6 +1122,25 @@ class WobblerVoice {
       if (key === 'unison' || key === 'unisonBlend') {
         this._applyUnisonDetune(t);
       }
+      if (key === 'waveform' && this._liveOsc) {
+        try {
+          if (val === 'pulse') {
+            this._liveOsc.setPeriodicWave(this._makePulseWave(this.p.osc.pw ?? 0.5));
+          } else if (val === 'supersaw') {
+            // supersaw is a bank of oscs — rebuild on next noteOn; set current to sawtooth as preview
+            this._liveOsc.type = 'sawtooth';
+          } else {
+            this._liveOsc.type = val;
+          }
+        } catch(_) {}
+        // Also update unison extra oscs
+        this._unisonExtraOscs?.forEach(u => {
+          try {
+            if (val === 'pulse') u.osc.setPeriodicWave(this._makePulseWave(this.p.osc.pw ?? 0.5));
+            else u.osc.type = val === 'supersaw' ? 'sawtooth' : val;
+          } catch(_) {}
+        });
+      }
       if (key === 'pw' && this._liveOsc && this.p.osc.waveform === 'pulse') {
         this._liveOsc.setPeriodicWave(this._makePulseWave(val));
       }
@@ -1095,11 +1154,35 @@ class WobblerVoice {
         }
       }
     }
+    if (section === 'osc2') {
+      if (!this.p.osc2) this.p.osc2 = {};
+      this.p.osc2[key] = val;
+      // osc2 is re-built on each noteOn from p.osc2 — no live node to update
+    }
+    if (section === 'sub') {
+      if (!this.p.sub) this.p.sub = {};
+      this.p.sub[key] = val;
+      // sub is re-built on each noteOn from p.sub — no live node to update
+    }
     if (section === 'noise') {
       this.p.noise[key] = val;
-      if (key === 'volume' && this._currentNoiseGain) {
-        this._currentNoiseGain.setTargetAtTime(val * (this._noteVelocity || 0.65), t, 0.01);
+      if (key === 'volume') {
+        const lvl = val * (this._noteVelocity || 0.7);
+        this._noiseLvlGain.gain.setTargetAtTime(lvl, t, 0.01);
+        if ((this.p.noise.lfoRate ?? 0) > 0) {
+          this._noiseLfoGain.gain.setTargetAtTime(lvl * 0.5, t, 0.01);
+        }
       }
+      if (key === 'lfoRate') {
+        this._noiseLfoOsc.frequency.setTargetAtTime(Math.max(0.01, val), t, 0.01);
+        const lvl = (this.p.noise.volume ?? 0) * (this._noteVelocity || 0.7);
+        this._noiseLfoGain.gain.setTargetAtTime(val > 0 ? lvl * 0.5 : 0, t, 0.01);
+      }
+      if (key === 'pitch' && this._noiseNode) {
+        const pr = Math.pow(2, val / 12);
+        this._noiseNode.playbackRate.setTargetAtTime(pr, t, 0.01);
+      }
+      if (key === 'envShape') { /* stored — applied on next noteOn */ }
       if (key === 'filterMix') {
         const t = this.ctx.currentTime;
         this._noiseToFilt.gain.setTargetAtTime(val, t, 0.01);

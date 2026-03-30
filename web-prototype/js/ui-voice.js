@@ -38,67 +38,6 @@ function buildVoicePanel(col, voice, color, bpmGet, oscMode, centerCol) {
     if (!on) voice._killSrcs();
   });
 
-  // ── Live oscilloscope ─────────────────────────────────────
-  (function buildScope() {
-    const scopeWrap = document.createElement('div');
-    scopeWrap.style.cssText = 'position:relative;margin-bottom:6px';
-    const cv = document.createElement('canvas');
-    cv.style.cssText = 'display:block;width:100%;height:52px;background:#030308;border-radius:4px;border:1px solid #1a1a30';
-    cv.height = 52;
-    scopeWrap.appendChild(cv);
-    const lbl = document.createElement('div');
-    lbl.style.cssText = 'position:absolute;top:3px;right:6px;font-size:9px;color:#333;letter-spacing:1px;pointer-events:none';
-    lbl.textContent = 'OUT';
-    scopeWrap.appendChild(lbl);
-    col.appendChild(scopeWrap);
-
-    const buf = new Float32Array(voice.analyser.fftSize);
-    let rafId = null;
-
-    function drawScope() {
-      rafId = requestAnimationFrame(drawScope);
-      const dpr = window.devicePixelRatio || 1;
-      const W = cv.offsetWidth || 200, H = cv.offsetHeight || 52;
-      if (!W || !H) return;
-      if (cv.width !== W * dpr) { cv.width = W * dpr; cv.height = H * dpr; }
-      const c = cv.getContext('2d'); c.scale(dpr, dpr);
-      c.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-      c.fillStyle = '#030308'; c.fillRect(0, 0, W, H);
-      // zero line
-      c.strokeStyle = 'rgba(255,255,255,0.06)'; c.lineWidth = 0.5;
-      c.beginPath(); c.moveTo(0, H/2); c.lineTo(W, H/2); c.stroke();
-
-      voice.analyser.getFloatTimeDomainData(buf);
-      const step = Math.floor(buf.length / W);
-
-      // glow pass
-      c.save();
-      c.strokeStyle = color; c.shadowColor = color; c.shadowBlur = 6;
-      c.globalAlpha = 0.3; c.lineWidth = 3; c.lineJoin = 'round';
-      c.beginPath();
-      for (let i = 0; i < W; i++) {
-        const s = buf[i * step] || 0;
-        const y = (0.5 - s * 0.45) * H;
-        i === 0 ? c.moveTo(i, y) : c.lineTo(i, y);
-      }
-      c.stroke(); c.restore();
-
-      // main line
-      c.save();
-      c.strokeStyle = color; c.lineWidth = 1.5; c.lineJoin = 'round';
-      c.shadowColor = color; c.shadowBlur = 2;
-      c.beginPath();
-      for (let i = 0; i < W; i++) {
-        const s = buf[i * step] || 0;
-        const y = (0.5 - s * 0.45) * H;
-        i === 0 ? c.moveTo(i, y) : c.lineTo(i, y);
-      }
-      c.stroke(); c.restore();
-    }
-    drawScope();
-  })();
-
   function sec(title) {
     const d=document.createElement('div'); d.className='v-sec';
     d.innerHTML=`<div class="sec-hdr">${title}</div>`; col.appendChild(d); return d;
@@ -112,399 +51,57 @@ function buildVoicePanel(col, voice, color, bpmGet, oscMode, centerCol) {
 
   // ── OSC SECTION ───────────────────────────────────────────
   const oscS = sec('OSC');
+  buildOscSection(oscS, { voice, p, oscMode, color });
 
-  // SVG waveform icon paths
-  const WAVE_SVG = {
-    sawtooth: '<svg viewBox="0 0 32 18" style="width:28px;height:18px"><path d="M2 14L16 3L16 14L30 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
-    square:   '<svg viewBox="0 0 32 18" style="width:28px;height:18px"><path d="M2 14L2 4L13 4L13 14L19 14L19 4L30 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
-    triangle: '<svg viewBox="0 0 32 18" style="width:28px;height:18px"><path d="M2 14L9 3L16 14L23 3L30 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
-    sine:     '<svg viewBox="0 0 32 18" style="width:28px;height:18px"><path d="M2 9Q8 1 16 9Q24 17 30 9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
-    pulse:    '<svg viewBox="0 0 32 18" style="width:28px;height:18px"><path d="M2 14L2 4L10 4L10 14L16 14L16 4L22 4L22 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
-    supersaw: '<svg viewBox="0 0 32 18" style="width:28px;height:18px"><path d="M2 14L8 4L8 14L14 4L14 14L20 4L20 14L26 4L26 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
-  };
+  // ADSR — interactive canvas (above Filter)
+  const aS = sec('ADSR');
+  buildADSRSection(aS, p.adsr, voice, color);
 
-  // Helper: build SVG waveform button row
-  function makeWaveRow(parent, waves, currentWave, onChange) {
-    const row = document.createElement('div'); row.className = 'btn-row osc-wave-row'; parent.appendChild(row);
-    const btns = [];
-    waves.forEach(w => {
-      const b = document.createElement('button');
-      b.className = 'wave-btn osc-wave-btn' + (currentWave === w ? ' active' : '');
-      b.innerHTML = WAVE_SVG[w] || w; b.dataset.waveform = w; b.title = w;
-      row.appendChild(b); btns.push(b);
-      b.addEventListener('click', () => { btns.forEach(x => x.classList.remove('active')); b.classList.add('active'); onChange(w); });
-    });
-    return { btns, activate: w => { btns.forEach(x => x.classList.remove('active')); const f = btns.find(b=>b.dataset.waveform===w); if(f) f.classList.add('active'); } };
-  }
-
-  // Helper: OCT segment row (-2/-1/0/+1/+2)
-  function makeOctRow(parent, vals, currentVal, onChange) {
-    const wrap = document.createElement('div'); wrap.style.cssText = 'margin-bottom:6px';
-    const lbl = document.createElement('div'); lbl.className = 'knob-lbl'; lbl.style.cssText = 'margin-bottom:3px;letter-spacing:1px'; lbl.textContent = 'OCT';
-    wrap.appendChild(lbl);
-    const row = document.createElement('div'); row.className = 'btn-row'; wrap.appendChild(row);
-    const btns = [];
-    vals.forEach(v => {
-      const b = document.createElement('button');
-      b.className = 'wave-btn' + (v === currentVal ? ' active' : '');
-      b.textContent = v >= 0 ? (v === 0 ? '0' : `+${v}`) : `${v}`; b.dataset.oct = v;
-      b.addEventListener('click', () => { btns.forEach(x => x.classList.remove('active')); b.classList.add('active'); onChange(v); });
-      btns.push(b); row.appendChild(b);
-    });
-    parent.appendChild(wrap);
-    return btns;
-  }
-
-  // Helper: drawable wavetable canvas (click+drag to draw custom waveform)
-  function makeWavetableCanvas(parent, accentColor, currentWave, onCustomWave) {
-    const wrap = document.createElement('div');
-    wrap.style.cssText = 'margin-top:6px;padding-top:6px;border-top:1px solid #1c1c3a';
-    const cv = document.createElement('canvas');
-    cv.style.cssText = 'display:block;width:100%;height:52px;background:#050510;border-radius:3px;border:1px solid #1c1c3a;cursor:crosshair;touch-action:none;margin-bottom:2px';
-    const N = 64;
-    let samples = new Float32Array(N);
-
-    function initFromWave(w) {
-      for (let i = 0; i < N; i++) {
-        const phase = (i / N) * Math.PI * 2;
-        switch(w) {
-          case 'sawtooth': samples[i] = 1 - (i / N) * 2; break;
-          case 'square':   samples[i] = i < N/2 ? 1 : -1; break;
-          case 'triangle': samples[i] = i < N/2 ? -1 + (i/(N/2))*2 : 1 - ((i-N/2)/(N/2))*2; break;
-          default:         samples[i] = Math.sin(phase); break;
-        }
-      }
-    }
-    initFromWave(currentWave);
-
-    function draw() {
-      const dpr = window.devicePixelRatio || 1;
-      const W = cv.offsetWidth || 200, H = cv.offsetHeight || 52;
-      cv.width = W * dpr; cv.height = H * dpr;
-      const c = cv.getContext('2d'); c.scale(dpr, dpr);
-      c.fillStyle = '#050510'; c.fillRect(0, 0, W, H);
-      c.strokeStyle = '#1a1a3a'; c.lineWidth = 0.5;
-      c.beginPath(); c.moveTo(0, H/2); c.lineTo(W, H/2); c.stroke();
-      c.beginPath(); c.strokeStyle = accentColor; c.lineWidth = 1.5;
-      for (let i = 0; i < N; i++) {
-        const x = (i / N) * W, y = (0.5 - samples[i] * 0.45) * H;
-        i === 0 ? c.moveTo(x, y) : c.lineTo(x, y);
-      }
-      c.stroke();
-    }
-
-    let painting = false;
-    function paintAt(e) {
-      const r = cv.getBoundingClientRect();
-      const cx = (e.touches ? e.touches[0].clientX : e.clientX) - r.left;
-      const cy = (e.touches ? e.touches[0].clientY : e.clientY) - r.top;
-      const idx = Math.max(0, Math.min(N-1, Math.round((cx / r.width) * N)));
-      samples[idx] = Math.max(-1, Math.min(1, (0.5 - cy / r.height) / 0.45));
-      draw(); onCustomWave(samples);
-    }
-    cv.addEventListener('pointerdown', e => { painting = true; cv.setPointerCapture(e.pointerId); paintAt(e); });
-    cv.addEventListener('pointermove', e => { if (painting) paintAt(e); });
-    cv.addEventListener('pointerup',   () => { painting = false; });
-
-    wrap.appendChild(cv);
-    const hint = document.createElement('div'); hint.style.cssText = 'font-size:10px;color:#444;text-align:center;margin-bottom:3px'; hint.textContent = 'draw waveform';
-    wrap.appendChild(hint);
-    parent.appendChild(wrap);
-    setTimeout(draw, 50);
-    return { redraw: initFromWave, samples };
-  }
-
-  // ── OSC block (Serum-inspired) ────────────────────────────
-  const oscModeLabel = oscMode === 'osc2' ? 'OSC 2' : oscMode === 'sub' ? 'SUB' : 'OSC 1';
-  const isOsc1 = oscMode !== 'osc2' && oscMode !== 'sub';
-  const isOsc2 = oscMode === 'osc2';
-  const isSub  = oscMode === 'sub';
-
-  // Param objects per mode
-  if (isSub  && !p.sub)  p.sub  = { waveform:'sine',     oct:-2, cents:0,  volume:0.6, unison:1, unisonDetune:10 };
-  if (isOsc2 && !p.osc2) p.osc2 = { waveform:'sawtooth', oct:0,  semi:0,   detune:7, cents:0, volume:0.5, unison:1, unisonDetune:10, spread:80 };
-
-  const pp = isOsc2 ? p.osc2 : isSub ? p.sub : p.osc; // shorthand
-
-  const _oscActive = isOsc2 ? p.osc2Active : isSub ? p.subActive : p.osc1Active !== false;
-
-  // ── OSC header row: [ON] [OSC 1 ▼ SAWTOOTH] ──────────────
-  const oscHdr = document.createElement('div');
-  oscHdr.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:6px';
-
-  const osc1OnBtn = document.createElement('button');
-  osc1OnBtn.className = 'osc-on-btn' + (_oscActive ? ' active' : '');
-  osc1OnBtn.textContent = oscModeLabel;
-  osc1OnBtn.style.cssText = `padding:3px 8px;font-size:11px;letter-spacing:1px;border-color:${_oscActive ? color : '#333'};color:${_oscActive ? color : '#555'}`;
-
-  const waveSelect = document.createElement('select');
-  waveSelect.style.cssText = `flex:1;background:#0e0e24;border:1px solid #2a2a44;color:${color};padding:3px 6px;font-family:monospace;font-size:11px;border-radius:3px;cursor:pointer;letter-spacing:1px`;
-  const waveOptions = isOsc1 ? ['sawtooth','square','triangle','sine','pulse','supersaw'] : isSub ? ['sine','sawtooth','square','triangle'] : ['sawtooth','square','triangle','sine'];
-  waveOptions.forEach(w => {
-    const opt = document.createElement('option');
-    opt.value = w; opt.textContent = w.toUpperCase();
-    if (w === (pp.waveform || 'sawtooth')) opt.selected = true;
-    waveSelect.appendChild(opt);
-  });
-
-  oscHdr.appendChild(osc1OnBtn);
-  oscHdr.appendChild(waveSelect);
-  oscS.appendChild(oscHdr);
-
-  const osc1Body = document.createElement('div');
-  osc1Body.style.cssText = `opacity:${_oscActive ? 1 : 0.4}`;
-  oscS.appendChild(osc1Body);
-
-  osc1OnBtn.addEventListener('click', () => {
-    if (isOsc2)      { p.osc2Active = !p.osc2Active; const on=p.osc2Active; osc1OnBtn.style.borderColor=on?color:'#333'; osc1OnBtn.style.color=on?color:'#555'; osc1Body.style.opacity=on?'1':'0.4'; }
-    else if (isSub)  { p.subActive  = !p.subActive;  const on=p.subActive;  osc1OnBtn.style.borderColor=on?color:'#333'; osc1OnBtn.style.color=on?color:'#555'; osc1Body.style.opacity=on?'1':'0.4'; }
-    else             { p.osc1Active = !p.osc1Active; const on=p.osc1Active; osc1OnBtn.style.borderColor=on?color:'#333'; osc1OnBtn.style.color=on?color:'#555'; osc1Body.style.opacity=on?'1':'0.4'; }
-  });
-
-  // ── Large drawable wavetable canvas ───────────────────────
-  const wtWrap = document.createElement('div');
-  wtWrap.style.cssText = 'position:relative;margin-bottom:6px';
-  const wtCv = document.createElement('canvas');
-  wtCv.style.cssText = 'display:block;width:100%;height:90px;background:#050510;border-radius:4px;border:1px solid #1e1e3a;cursor:crosshair;touch-action:none';
-  const N = 128;
-  let wtSamples = new Float32Array(N);
-
-  function wtInitFromWave(w) {
-    for (let i = 0; i < N; i++) {
-      const phase = (i / N) * Math.PI * 2;
-      if      (w === 'sawtooth') wtSamples[i] = 1 - (i / N) * 2;
-      else if (w === 'square')   wtSamples[i] = i < N/2 ? 1 : -1;
-      else if (w === 'triangle') wtSamples[i] = i < N/2 ? -1 + (i/(N/2))*2 : 1 - ((i-N/2)/(N/2))*2;
-      else if (w === 'pulse')    wtSamples[i] = i < N*0.3 ? 1 : -1;
-      else if (w === 'supersaw') wtSamples[i] = (1 - (i/N)*2) * 0.7 + Math.sin(phase*3)*0.3;
-      else                       wtSamples[i] = Math.sin(phase);
-    }
-  }
-  // Restore custom drawn samples if saved, otherwise init from wave
-  if (pp._customSamples && pp._customSamples.length === N) {
-    wtSamples = new Float32Array(pp._customSamples);
-  } else {
-    wtInitFromWave(pp.waveform || 'sawtooth');
-  }
-
-  function wtDraw() {
-    const dpr = window.devicePixelRatio || 1;
-    const W = wtCv.offsetWidth || 260, H = wtCv.offsetHeight || 90;
-    wtCv.width = W * dpr; wtCv.height = H * dpr;
-    const c = wtCv.getContext('2d'); c.scale(dpr, dpr);
-    c.fillStyle = '#050510'; c.fillRect(0, 0, W, H);
-    // grid
-    c.strokeStyle = 'rgba(255,255,255,0.04)'; c.lineWidth = 0.5;
-    [0.25,0.5,0.75].forEach(y => { c.beginPath(); c.moveTo(0,y*H); c.lineTo(W,y*H); c.stroke(); });
-    // zero line
-    c.strokeStyle = 'rgba(255,255,255,0.08)'; c.lineWidth = 1;
-    c.beginPath(); c.moveTo(0,H/2); c.lineTo(W,H/2); c.stroke();
-    // fill
-    c.beginPath();
-    for (let i = 0; i < N; i++) {
-      const x = (i/N)*W, y = (0.5 - wtSamples[i]*0.45)*H;
-      i===0 ? c.moveTo(x,y) : c.lineTo(x,y);
-    }
-    c.save(); c.globalAlpha=0.12; c.strokeStyle=color; c.lineWidth=8; c.stroke(); c.restore();
-    c.strokeStyle=color; c.lineWidth=2; c.stroke();
-  }
-
-  let wtPainting = false;
-  function wtPaintAt(e) {
-    const r = wtCv.getBoundingClientRect();
-    const cx = (e.touches ? e.touches[0].clientX : e.clientX) - r.left;
-    const cy = (e.touches ? e.touches[0].clientY : e.clientY) - r.top;
-    const idx = Math.max(0, Math.min(N-1, Math.round((cx/r.width)*N)));
-    wtSamples[idx] = Math.max(-1, Math.min(1, (0.5 - cy/r.height)/0.45));
-    wtDraw();
-    const saved = Array.from(wtSamples); // plain array for JSON serialization
-    if (isOsc1) {
-      p.osc._customSamples = saved;
-      const pw = voice._makePeriodicWave ? voice._makePeriodicWave(wtSamples) : null;
-      if (pw) (voice._activeOscs||[]).forEach(o => { try { o.setPeriodicWave(pw); } catch(_){} });
-    } else if (isOsc2) { p.osc2._customSamples = saved; }
-    else { p.sub._customSamples = saved; }
-  }
-  wtCv.addEventListener('pointerdown', e => { wtPainting=true; wtCv.setPointerCapture(e.pointerId); wtPaintAt(e); });
-  wtCv.addEventListener('pointermove', e => { if(wtPainting) wtPaintAt(e); });
-  wtCv.addEventListener('pointerup',   () => { wtPainting=false; });
-
-  // hint
-  const wtHint = document.createElement('div');
-  wtHint.style.cssText = 'position:absolute;bottom:4px;right:6px;font-size:9px;color:#333;pointer-events:none;letter-spacing:1px';
-  wtHint.textContent = 'DRAW';
-  wtWrap.appendChild(wtCv); wtWrap.appendChild(wtHint);
-  osc1Body.appendChild(wtWrap);
-  setTimeout(wtDraw, 50);
-
-  waveSelect.addEventListener('change', () => {
-    const w = waveSelect.value;
-    if (isOsc1) voice.set('osc','waveform',w);
-    else if (isOsc2) { p.osc2.waveform = w; }
-    else { p.sub.waveform = w; }
-    // Clear custom samples so dropdown resets to standard wave
-    pp._customSamples = null;
-    wtInitFromWave(w); wtDraw();
-  });
-
-  // ── Compact drag-param row: OCT / SEM / FIN / DET / LEVEL ─
-  function makeDragParam({ parent, label, value, min, max, decimals=0, unit='', step=1, onChange }) {
-    const wrap = document.createElement('div');
-    wrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;flex:1;cursor:ns-resize;user-select:none';
-    const lbl = document.createElement('div');
-    lbl.style.cssText = 'font-size:9px;color:#555;letter-spacing:1px;margin-bottom:1px';
-    lbl.textContent = label;
-    const val = document.createElement('div');
-    val.style.cssText = `font-size:12px;color:${color};font-family:monospace;letter-spacing:1px`;
-    val.textContent = (decimals>0 ? value.toFixed(decimals) : Math.round(value)) + unit;
-    let current = value, startY = 0, startV = 0;
-    wrap.addEventListener('pointerdown', e => {
-      wrap.setPointerCapture(e.pointerId); startY=e.clientY; startV=current;
-    });
-    wrap.addEventListener('pointermove', e => {
-      if (e.buttons===0) return;
-      const delta = (startY - e.clientY) * step * 0.5;
-      current = Math.max(min, Math.min(max, startV + delta));
-      const disp = decimals>0 ? current.toFixed(decimals) : Math.round(current);
-      val.textContent = disp + unit;
-      onChange(decimals>0 ? current : Math.round(current));
-    });
-    wrap.append(lbl, val);
-    parent.appendChild(wrap);
-    return { setValue: v => { current=v; val.textContent=(decimals>0?v.toFixed(decimals):Math.round(v))+unit; } };
-  }
-
-  const paramRow = document.createElement('div');
-  paramRow.style.cssText = 'display:flex;gap:2px;background:#0a0a1e;border:1px solid #1a1a30;border-radius:4px;padding:5px 4px;margin-bottom:6px';
-  osc1Body.appendChild(paramRow);
-
-  if (isOsc1) {
-    makeDragParam({ parent:paramRow, label:'OCT', value:Math.round((p.osc.pitch??0)/12), min:-4, max:4, unit:'', step:1, onChange: v => voice.set('osc','pitch', v*12) });
-    makeDragParam({ parent:paramRow, label:'SEM', value:Math.round((p.osc.pitch??0)%12), min:-12, max:12, unit:'', step:1, onChange: v => voice.set('osc','pitch', Math.round((p.osc.pitch??0)/12)*12 + v) });
-    makeDragParam({ parent:paramRow, label:'FIN', value:p.osc.cent??0, min:-100, max:100, unit:'¢', step:1, onChange: v => voice.set('osc','cent',v) });
-    const pwWrap = document.createElement('div'); pwWrap.style.cssText='flex:1;display:'+(p.osc.waveform==='pulse'?'flex':'none');
-    makeDragParam({ parent:pwWrap, label:'PW', value:p.osc.pw??0.5, min:0.1, max:0.9, decimals:2, step:0.01, onChange: v => voice.set('osc','pw',v) });
-    paramRow.appendChild(pwWrap);
-    makeDragParam({ parent:paramRow, label:'LEVEL', value:p.osc.volume??0.8, min:0, max:1, decimals:2, step:0.01, onChange: v => voice.set('osc','volume',v) });
-    waveSelect.addEventListener('change', () => { pwWrap.style.display = waveSelect.value==='pulse' ? 'flex':'none'; });
-  } else if (isOsc2) {
-    makeDragParam({ parent:paramRow, label:'OCT',  value:p.osc2.oct??0,    min:-4,   max:4,   unit:'',  step:1,    onChange: v => { p.osc2.oct=v; } });
-    makeDragParam({ parent:paramRow, label:'SEM',  value:p.osc2.semi??0,   min:-12,  max:12,  unit:'',  step:1,    onChange: v => { p.osc2.semi=v; } });
-    makeDragParam({ parent:paramRow, label:'FIN',  value:p.osc2.cents??0,  min:-100, max:100, unit:'¢', step:1,    onChange: v => { p.osc2.cents=v; } });
-    makeDragParam({ parent:paramRow, label:'DET',  value:p.osc2.detune??7, min:-100, max:100, unit:'¢', step:1,    onChange: v => { p.osc2.detune=v; } });
-    makeDragParam({ parent:paramRow, label:'LEVEL',value:p.osc2.volume??0.5,min:0,   max:1,   decimals:2, step:0.01, onChange: v => { p.osc2.volume=v; } });
-  } else {
-    makeDragParam({ parent:paramRow, label:'OCT',  value:p.sub.oct??-2,     min:-4,   max:0,   unit:'',  step:1,    onChange: v => { p.sub.oct=v; } });
-    makeDragParam({ parent:paramRow, label:'FIN',  value:p.sub.cents??0,    min:-100, max:100, unit:'¢', step:1,    onChange: v => { p.sub.cents=v; } });
-    makeDragParam({ parent:paramRow, label:'LEVEL',value:p.sub.volume??0.6, min:0,    max:1,   decimals:2,step:0.01, onChange: v => { p.sub.volume=v; } });
-  }
-
-  // ── Bottom knob row: UNISON stepper + DETUNE + BLEND ──────
-  const botRow = document.createElement('div');
-  botRow.style.cssText = 'display:flex;gap:6px;align-items:flex-end;margin-bottom:4px';
-  osc1Body.appendChild(botRow);
-
-  // UNISON stepper
-  const uniWrap = document.createElement('div');
-  uniWrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:2px';
-  const uniLbl = document.createElement('div'); uniLbl.style.cssText='font-size:9px;color:#555;letter-spacing:1px'; uniLbl.textContent='UNISON';
-  const uniCtrl = document.createElement('div'); uniCtrl.style.cssText='display:flex;align-items:center;gap:2px';
-  const uniDn = document.createElement('button'); uniDn.textContent='−'; uniDn.style.cssText='width:16px;height:20px;padding:0;font-size:13px;border:1px solid #2a2a44;background:#0e0e24;color:#aaa;border-radius:2px;';
-  const uniVal = document.createElement('div'); uniVal.style.cssText=`min-width:22px;text-align:center;font-size:13px;color:${color};font-family:monospace`;
-  const currentUnison = isOsc2 ? (p.osc2.unison??1) : isSub ? (p.sub?.unison??1) : (p.osc.unison??1);
-  uniVal.textContent = currentUnison;
-  const uniUp = document.createElement('button'); uniUp.textContent='+'; uniUp.style.cssText='width:16px;height:20px;padding:0;font-size:13px;border:1px solid #2a2a44;background:#0e0e24;color:#aaa;border-radius:2px;';
-  uniCtrl.append(uniDn, uniVal, uniUp);
-  uniWrap.append(uniLbl, uniCtrl);
-  botRow.appendChild(uniWrap);
-
-  // DETUNE + BLEND + WIDTH — only visible when unison > 1
-  const uniParamsWrap = document.createElement('div');
-  uniParamsWrap.style.cssText = 'display:flex;gap:6px;align-items:flex-end;flex:1';
-  botRow.appendChild(uniParamsWrap);
-
-  if (isOsc1) {
-    makeKnob({ parent:uniParamsWrap, min:0, max:100, value:p.osc.unisonDetune??20, label:'DETUNE', unit:'¢', decimals:0, step:1, color, onChange: v => voice.set('osc','unisonDetune',v) });
-    makeKnob({ parent:uniParamsWrap, min:0, max:1,   value:p.osc.unisonBlend??1,   label:'BLEND',  decimals:2, color, onChange: v => voice.set('osc','unisonBlend',v) });
-    makeKnob({ parent:uniParamsWrap, min:0, max:100, value:(p.osc.spread??0.5)*100, label:'WIDTH', unit:'%', decimals:0, color, onChange: v => voice.set('osc','spread',v/100) });
-  } else if (isOsc2) {
-    makeKnob({ parent:uniParamsWrap, min:0, max:100, value:p.osc2.unisonDetune??10, label:'DETUNE', unit:'¢', decimals:0, step:1, color, onChange: v => { p.osc2.unisonDetune=v; } });
-    makeKnob({ parent:uniParamsWrap, min:0, max:100, value:p.osc2.spread??80,       label:'WIDTH',  unit:'%', decimals:0, color, onChange: v => { p.osc2.spread=v; } });
-  } else {
-    makeKnob({ parent:uniParamsWrap, min:0, max:100, value:p.sub?.unisonDetune??10, label:'DETUNE', unit:'¢', decimals:0, step:1, color, onChange: v => { if(p.sub) p.sub.unisonDetune=v; } });
-  }
-
-  let unisonVal = currentUnison;
-  function setUnison(n) {
-    unisonVal = Math.max(1, Math.min(16, n));
-    uniVal.textContent = unisonVal;
-    uniParamsWrap.style.display = unisonVal > 1 ? 'flex' : 'none';
-    if (isOsc1) voice.set('osc','unison', unisonVal);
-    else if (isOsc2) p.osc2.unison = unisonVal;
-    else if (p.sub) p.sub.unison = unisonVal;
-  }
-  uniDn.addEventListener('click', () => setUnison(unisonVal-1));
-  uniUp.addEventListener('click', () => setUnison(unisonVal+1));
-  // Set initial visibility
-  uniParamsWrap.style.display = currentUnison > 1 ? 'flex' : 'none';
-
-  // Noise panel only on OSC1
-  if (isOsc1) {
-    const noisePanel = createNoisePanel({ voice, color });
-    noisePanel.element.style.cssText = 'margin-top:6px;padding-top:6px;border-top:1px solid #1c1c3a';
-    osc1Body.appendChild(noisePanel.element);
-  }
-
-  // Filter — stacked: canvas top, type row, knobs below
+  // Filter — knobs LEFT, curve RIGHT
   const fS = sec('FILTER');
 
-  // ── Large live curve canvas ────────────────────────────
-  const curveCvs = document.createElement('canvas');
-  curveCvs.style.cssText = 'display:block;width:100%;height:130px;background:#06060f;border-radius:4px 4px 0 0;border:1px solid #1a1a30;border-bottom:none;cursor:crosshair';
-  curveCvs.height = 130;
-  fS.appendChild(curveCvs);
+  // ── Filter layout: top row = type btns | bottom row = knobs left + curve right ──
 
-  // Freq labels bar
-  const freqLbls = document.createElement('div');
-  freqLbls.style.cssText = 'display:flex;justify-content:space-between;background:#06060f;border:1px solid #1a1a30;border-top:none;border-radius:0 0 4px 4px;padding:1px 6px;margin-bottom:7px';
-  freqLbls.innerHTML = '<span style="font-size:9px;color:#333">20</span><span style="font-size:9px;color:#333">100</span><span style="font-size:9px;color:#333">1k</span><span style="font-size:9px;color:#333">10k</span><span style="font-size:9px;color:#333">20k</span>';
-  fS.appendChild(freqLbls);
-
-  // ── Type buttons + cutoff readout row ─────────────────
+  // Row 1: filter type buttons (full width, compact)
   const fTypeRow = document.createElement('div');
-  fTypeRow.style.cssText = 'display:flex;align-items:center;gap:4px;margin-bottom:6px';
+  fTypeRow.style.cssText = 'display:flex;gap:3px;margin-bottom:5px;justify-content:flex-start';
   fS.appendChild(fTypeRow);
-
-  // Filter type buttons
-  const ftBtnWrap = document.createElement('div');
-  ftBtnWrap.style.cssText = 'display:flex;gap:3px;flex:1';
-  fTypeRow.appendChild(ftBtnWrap);
   const ftBtns = [];
   FILTER_TYPES.forEach((ft, idx) => {
     const b = document.createElement('button');
     b.className = 'ftype-btn' + (p.filter.type === ft ? ' active' : '');
     b.textContent = FILTER_LABELS[idx];
-    b.style.cssText = `flex:1;padding:3px 0;font-size:10px;letter-spacing:1px;border-color:${p.filter.type===ft?color:'#2a2a44'};color:${p.filter.type===ft?color:'#555'}`;
+    b.style.cssText = `padding:3px 8px;font-size:10px;letter-spacing:1px;border-color:${p.filter.type===ft?color:'#2a2a44'};color:${p.filter.type===ft?color:'#555'}`;
     b.addEventListener('click', () => {
       ftBtns.forEach(x => { x.style.borderColor='#2a2a44'; x.style.color='#555'; });
       b.style.borderColor = color; b.style.color = color;
       voice.set('filter', 'type', ft);
       if (typeof redrawFilterCurve === 'function') redrawFilterCurve();
     });
-    ftBtns.push(b); ftBtnWrap.appendChild(b);
+    ftBtns.push(b); fTypeRow.appendChild(b);
   });
 
-  // Cutoff live readout
-  const cutReadout = document.createElement('div');
-  cutReadout.style.cssText = `font-size:11px;color:${color};font-family:monospace;letter-spacing:1px;min-width:64px;text-align:right`;
-  cutReadout.textContent = p.filter.cutoff >= 1000 ? (p.filter.cutoff/1000).toFixed(1)+'k' : Math.round(p.filter.cutoff)+'Hz';
-  fTypeRow.appendChild(cutReadout);
+  // Row 2: knobs (left, flex:1) + curve canvas (right, max 50%)
+  const fInner = document.createElement('div');
+  fInner.style.cssText = 'display:flex;gap:6px;align-items:stretch';
+  fS.appendChild(fInner);
 
-  // Q readout
+  // LEFT: horizontal knob row
+  const fLeft = document.createElement('div');
+  fLeft.style.cssText = 'flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;justify-content:center';
+  fInner.appendChild(fLeft);
+
+  // Cutoff + Q readouts
+  const cutReadout = document.createElement('div');
+  cutReadout.style.cssText = `font-size:10px;color:${color};font-family:monospace;letter-spacing:1px`;
+  cutReadout.textContent = p.filter.cutoff >= 1000 ? (p.filter.cutoff/1000).toFixed(1)+'k' : Math.round(p.filter.cutoff)+'Hz';
   const resReadout = document.createElement('div');
-  resReadout.style.cssText = 'font-size:11px;color:#888;font-family:monospace;letter-spacing:1px;min-width:40px;text-align:right';
+  resReadout.style.cssText = 'font-size:10px;color:#555;font-family:monospace;letter-spacing:1px';
   resReadout.textContent = 'Q'+p.filter.resonance.toFixed(1);
-  fTypeRow.appendChild(resReadout);
+  const readoutBar = document.createElement('div');
+  readoutBar.style.cssText = 'display:flex;gap:8px;padding:0 2px';
+  readoutBar.append(cutReadout, resReadout);
+  fLeft.appendChild(readoutBar);
 
   function updateFilterReadouts() {
     const hz = p.filter.cutoff;
@@ -512,25 +109,36 @@ function buildVoicePanel(col, voice, color, bpmGet, oscMode, centerCol) {
     resReadout.textContent = 'Q'+p.filter.resonance.toFixed(1);
   }
 
-  // ── Knob row ───────────────────────────────────────────
-  const filterKnobRow = createKnobRow({
-    parent: fS, color,
-    knobs: [
-      { min: 20,    max: 18000, value: p.filter.cutoff,    label: 'CUT',   decimals: 0, log: true, onChange: v => { voice.set('filter','cutoff',v);    updateFilterReadouts(); redrawFilterCurve(); } },
-      { min: 0,     max: 30,   value: p.filter.resonance, label: 'RES',   decimals: 1, onChange: v => { voice.set('filter','resonance',v); updateFilterReadouts(); redrawFilterCurve(); } },
-      { min: 0,     max: 12000,value: p.filter.envAmount, label: 'ENV',   decimals: 0, onChange: v => { voice.set('filter','envAmount',v); redrawFilterCurve(); } },
-      { min: 0,     max: 1,    value: p.filter.mix,       label: 'MIX',   decimals: 2, onChange: v => voice.set('filter','mix',v) },
-      { min: -1,    max: 1,    value: p.pan,              label: 'PAN',   decimals: 2, onChange: v => voice.set('filter','pan',v) }
-    ]
-  });
-  const cutKnob = filterKnobRow.knobs[0];
+  // Single horizontal knob row
+  const fKnobRow = document.createElement('div');
+  fKnobRow.style.cssText = 'display:flex;gap:2px;align-items:flex-end';
+  fLeft.appendChild(fKnobRow);
 
-  // Ensure filter node matches p params before drawing (getFrequencyResponse needs .value in sync)
+  const cutKnob = makeKnob({ parent:fKnobRow, min:20,    max:18000, value:p.filter.cutoff,    label:'CUT', decimals:0, log:true, size:46, color, onChange: v => { voice.set('filter','cutoff',v);    updateFilterReadouts(); redrawFilterCurve(); } });
+  makeKnob({ parent:fKnobRow, min:0,     max:30,    value:p.filter.resonance, label:'RES', decimals:1,          size:46, color, onChange: v => { voice.set('filter','resonance',v); updateFilterReadouts(); redrawFilterCurve(); } });
+  makeKnob({ parent:fKnobRow, min:0,     max:12000, value:p.filter.envAmount, label:'ENV', decimals:0,          size:46, color, onChange: v => { voice.set('filter','envAmount',v); redrawFilterCurve(); } });
+  makeKnob({ parent:fKnobRow, min:0,     max:1,     value:p.filter.mix,       label:'MIX', decimals:2,          size:46, color, onChange: v => voice.set('filter','mix',v) });
+
+  // RIGHT: curve canvas — max 50% of section width
+  const fRight = document.createElement('div');
+  fRight.style.cssText = 'flex:0 0 50%;max-width:50%;display:flex;flex-direction:column;gap:0';
+  fInner.appendChild(fRight);
+
+  const curveCvs = document.createElement('canvas');
+  curveCvs.style.cssText = 'display:block;width:100%;height:90px;background:#06060f;border-radius:4px 4px 0 0;border:1px solid #1a1a30;border-bottom:none;cursor:crosshair';
+  fRight.appendChild(curveCvs);
+
+  const freqLbls = document.createElement('div');
+  freqLbls.style.cssText = 'display:flex;justify-content:space-between;background:#06060f;border:1px solid #1a1a30;border-top:none;border-radius:0 0 4px 4px;padding:1px 4px';
+  freqLbls.innerHTML = '<span style="font-size:8px;color:#333">20</span><span style="font-size:8px;color:#333">1k</span><span style="font-size:8px;color:#333">20k</span>';
+  fRight.appendChild(freqLbls);
+
+  // Ensure filter node matches p params before drawing
   voice.filter.type = p.filter.type;
   voice.filter.frequency.value = p.filter.cutoff;
   voice.filter.Q.value = p.filter.resonance;
   function redrawFilterCurve() {
-    curveCvs.width = curveCvs.offsetWidth || curveCvs.parentElement?.offsetWidth || 260;
+    curveCvs.width = curveCvs.offsetWidth || curveCvs.parentElement?.offsetWidth || 200;
     drawFilterCurve(curveCvs, voice.filter, color, p.filter.envAmount, null, voice.analyser, voice.preAnalyser, null);
   }
   setTimeout(redrawFilterCurve, 60);
@@ -617,24 +225,44 @@ function buildVoicePanel(col, voice, color, bpmGet, oscMode, centerCol) {
   let _modRafId = null;
   let _lastModCutoff = null, _lastModNoise = null;
   let _lastModDrawTime = 0;
+  let _lastDrawKey = null; // tracks last drawn state to skip redundant redraws
+  let _releaseUntil = 0;   // performance.now() timestamp until release tail is over
+  function _isAudible() {
+    return voice._playing || performance.now() < _releaseUntil;
+  }
   function modAnimLoop(ts) {
     if (ts - _lastModDrawTime >= 50) { // ~20fps cap
       _lastModDrawTime = ts;
       const mc = estimateModCutoff();
-      // Always sync filter node to current params then redraw
+      // Sync filter node params
       voice.filter.frequency.value = p.filter.cutoff;
       voice.filter.Q.value = p.filter.resonance;
-      if (!curveCvs.width || curveCvs.width < 10) curveCvs.width = curveCvs.offsetWidth || curveCvs.parentElement?.offsetWidth || 260;
-      // Build lfoState from LFO engine slot 0 if targeting cutoff
+      // Build lfoState from LFO engine slot targeting cutoff
       const _lfoSlot = voice.lfoEngine?.slots?.find(s => s.target === 'cutoff' && s._enabled !== false && s.depth > 0);
+      const _lfoActive = !!(_lfoSlot && _isAudible());
+      const _lfoPhase = _lfoSlot ? (_lfoSlot.phase || 0) : 0;
       const _lfoState = _lfoSlot ? {
-        active: true,
-        phase:  _lfoSlot.phase || 0,
+        active: _lfoActive,
+        phase:  _lfoPhase,
         mult:   _lfoSlot.mult  || 1,
         points: _lfoSlot.points || [],
         depth:  Math.min(1, (_lfoSlot.depth || 0) / (p.filter.cutoff || 800))
       } : null;
-      drawFilterCurve(curveCvs, voice.filter, color, p.filter.envAmount, mc, voice.analyser, voice.preAnalyser, _lfoState);
+      // Build a state key — skip redraw if nothing has changed
+      const hasFFT = _isAudible();
+      const drawKey = [
+        p.filter.cutoff, p.filter.resonance, p.filter.type, p.filter.envAmount,
+        mc, _lfoActive ? Math.round(_lfoPhase * 200) : 0, hasFFT ? ts : 0
+      ].join('|');
+      if (drawKey === _lastDrawKey) {
+        _modRafId = requestAnimationFrame(modAnimLoop); return;
+      }
+      _lastDrawKey = drawKey;
+      if (!curveCvs.width || curveCvs.width < 10) curveCvs.width = curveCvs.offsetWidth || curveCvs.parentElement?.offsetWidth || 260;
+      drawFilterCurve(curveCvs, voice.filter, color, p.filter.envAmount, mc,
+        hasFFT ? voice.analyser : null,
+        hasFFT ? voice.preAnalyser : null,
+        _lfoState);
       // Update modulation ring on CUT knob only when mod value changes
       const changed = mc === null
         ? _lastModCutoff !== null
@@ -661,14 +289,20 @@ function buildVoicePanel(col, voice, color, bpmGet, oscMode, centerCol) {
     get() { return this.__playing; },
     set(v) {
       this.__playing = v;
+      _lastDrawKey = null; // force redraw on note-on and note-off
       if (!v) {
+        // Keep visualization alive for the full release duration
+        const relMs = Math.max(600, (p.adsr.release || 0.12) * 1000 + 200);
+        _releaseUntil = performance.now() + relMs;
         setTimeout(() => {
           if (!voice._playing) {
+            _releaseUntil = 0;
             _lastModCutoff = null; _lastModNoise = null;
+            _lastDrawKey = null;
             cutKnob.clearModValue();
             voice._noiseKnob?.clearModValue();
           }
-        }, 600);
+        }, relMs);
       }
     },
     configurable: true
@@ -711,10 +345,6 @@ function buildVoicePanel(col, voice, color, bpmGet, oscMode, centerCol) {
     },
     !voice.p.filter.bypassed
   );
-
-  // ADSR — interactive canvas
-  const aS = sec('ADSR');
-  buildADSRSection(aS, p.adsr, voice, color);
 
   // ── DISTORTION ────────────────────────────────────────────
   const distS = sec('DISTORTION');
@@ -1415,6 +1045,130 @@ function buildVoicePanel(col, voice, color, bpmGet, oscMode, centerCol) {
   centerCol.appendChild(seqS);
 
   // ── EQ ────────────────────────────────────────────────────
+  // ── MOD MONITOR ───────────────────────────────────────────
+  (function buildModMonitor() {
+    const modS = cSec('MOD MONITOR');
+    modS.style.cssText += ';padding-bottom:8px';
+
+    const canvas = document.createElement('canvas');
+    canvas.style.cssText = 'display:block;width:100%;height:110px;background:#04040d;border-radius:4px;border:1px solid #1a1a30';
+    modS.appendChild(canvas);
+
+    const LANES = [
+      { label:'LFO 1', color:'#a855f7', getValue: () => {
+          const s = voice.lfoEngine?.slots?.[0]; if (!s || !s.enabled || s.target==='none') return null;
+          const ph = Math.round(s.phase * (s.points?.length||512)); return s.points?.[ph % (s.points.length||512)] ?? null; } },
+      { label:'LFO 2', color:'#6366f1', getValue: () => {
+          const s = voice.lfoEngine?.slots?.[1]; if (!s || !s.enabled || s.target==='none') return null;
+          const ph = Math.round(s.phase * (s.points?.length||512)); return s.points?.[ph % (s.points.length||512)] ?? null; } },
+      { label:'LFO 3', color:'#3b82f6', getValue: () => {
+          const s = voice.lfoEngine?.slots?.[2]; if (!s || !s.enabled || s.target==='none') return null;
+          const ph = Math.round(s.phase * (s.points?.length||512)); return s.points?.[ph % (s.points.length||512)] ?? null; } },
+      { label:'LFO 4', color:'#06b6d4', getValue: () => {
+          const s = voice.lfoEngine?.slots?.[3]; if (!s || !s.enabled || s.target==='none') return null;
+          const ph = Math.round(s.phase * (s.points?.length||512)); return s.points?.[ph % (s.points.length||512)] ?? null; } },
+      { label:'TWE',   color:'#f59e0b', getValue: () => {
+          if (p.twe._bypassed) return null;
+          const g = voice.tweMain?.gain?.gain?.value; return g != null ? g / (Math.max(0.01, p.twe.main?.depth||1)) : null; } },
+      { label:'ENV',   color:'#22c55e', getValue: () => {
+          if (!voice._playing) return null;
+          const env = voice._envTracker?.current ?? null; return env; } },
+    ];
+
+    const HISTORY = 200; // pixels of history
+    const history = LANES.map(() => new Float32Array(HISTORY));
+    let _rafId = null;
+
+    function drawMonitor() {
+      _rafId = requestAnimationFrame(drawMonitor);
+      const dpr = window.devicePixelRatio || 1;
+      const W = canvas.offsetWidth || 400, H = canvas.offsetHeight || 110;
+      if (!W || !H) return;
+      if (canvas.width !== W*dpr || canvas.height !== H*dpr) { canvas.width=W*dpr; canvas.height=H*dpr; }
+      const c = canvas.getContext('2d');
+      c.setTransform(dpr,0,0,dpr,0,0);
+      c.clearRect(0,0,W,H);
+      c.fillStyle='#04040d'; c.fillRect(0,0,W,H);
+
+      const laneH = H / LANES.length;
+
+      LANES.forEach((lane, li) => {
+        const y0 = li * laneH, yMid = y0 + laneH * 0.5;
+
+        // shift history left, push new value
+        const val = lane.getValue();
+        for (let i=0; i<HISTORY-1; i++) history[li][i] = history[li][i+1];
+        history[li][HISTORY-1] = val ?? -1; // -1 = inactive
+
+        const active = val !== null;
+
+        // lane bg
+        c.fillStyle = active ? `${lane.color}11` : 'transparent';
+        c.fillRect(0, y0, W, laneH);
+
+        // divider
+        c.strokeStyle = 'rgba(255,255,255,0.04)'; c.lineWidth = 0.5;
+        c.beginPath(); c.moveTo(0,y0); c.lineTo(W,y0); c.stroke();
+
+        // label
+        c.fillStyle = active ? lane.color : '#333';
+        c.font = `bold 8px monospace`; c.fillText(lane.label, 5, y0 + laneH*0.45 + 3);
+
+        // target label
+        let tgtLabel = '';
+        if (li < 5 && voice.lfoEngine?.slots?.[li]) tgtLabel = voice.lfoEngine.slots[li].target || '';
+        else if (lane.label==='TWE') tgtLabel = p.twe.main?.target || '';
+        else if (lane.label==='ENV') tgtLabel = 'cutoff';
+        if (tgtLabel && tgtLabel !== 'none') {
+          c.fillStyle = active ? `${lane.color}99` : '#222';
+          c.font = '7px monospace'; c.fillText(tgtLabel.toUpperCase(), 5, y0 + laneH*0.45 + 11);
+        }
+
+        if (!active) return;
+
+        // waveform history line
+        const xOff = 42;
+        const plotW = W - xOff - 4;
+        c.save();
+        c.strokeStyle = lane.color; c.lineWidth = 1.2; c.lineJoin='round';
+        c.shadowColor = lane.color; c.shadowBlur = 3;
+        c.globalAlpha = 0.85;
+        c.beginPath();
+        for (let i=0; i<HISTORY; i++) {
+          const v = history[li][i];
+          if (v < 0) continue; // inactive gap
+          const x = xOff + (i / HISTORY) * plotW;
+          const y = y0 + laneH*0.1 + (1-v) * laneH*0.8;
+          i===0 || history[li][i-1]<0 ? c.moveTo(x,y) : c.lineTo(x,y);
+        }
+        c.stroke();
+        c.restore();
+
+        // current value bar (right side)
+        if (val !== null) {
+          const barH = val * laneH * 0.7;
+          c.save();
+          c.fillStyle = lane.color; c.globalAlpha = 0.8;
+          c.shadowColor = lane.color; c.shadowBlur = 4;
+          c.fillRect(W-8, y0 + laneH - barH - laneH*0.15, 4, barH);
+          c.restore();
+          // value readout
+          c.fillStyle = lane.color; c.font='7px monospace';
+          c.fillText(val.toFixed(2), W-34, y0 + laneH*0.45 + 3);
+        }
+      });
+
+      // "ALL INACTIVE" hint
+      const anyActive = LANES.some(l => l.getValue() !== null);
+      if (!anyActive) {
+        c.fillStyle='#222'; c.font='10px monospace'; c.textAlign='center';
+        c.fillText('Enable LFO/TWE to see modulation signals', W/2, H/2);
+        c.textAlign='left';
+      }
+    }
+    drawMonitor();
+  })();
+
   const eqS = cSec('EQ');
   buildEQSection(eqS, p.eq, voice, color);
 

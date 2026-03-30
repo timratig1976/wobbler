@@ -5,8 +5,21 @@ class _EnvTracker {
   }
   _at(t) {
     const dt = Math.max(0, t - this._t0);
+    // Auto-advance attack → decay → sustain based on elapsed time
+    if (this._phase === 'attack') {
+      const A = Math.max(0.001, this._A);
+      if (dt < A) {
+        return this._v0 + (this._vel - this._v0) * (dt / A);
+      }
+      // Advance to decay phase
+      const dtD = dt - A;
+      const D = Math.max(0.001, this._D * 0.25);
+      const sus = this._S * this._vel;
+      const decVal = sus + (this._vel - sus) * Math.exp(-dtD / D);
+      if (dtD >= this._D * 3) return sus; // settled at sustain
+      return decVal;
+    }
     switch (this._phase) {
-      case 'attack':  return this._v0 + (this._vel - this._v0) * Math.min(1, dt / Math.max(0.001, this._A));
       case 'decay':   { const sus = this._S * this._vel; return sus + (this._vel - sus) * Math.exp(-dt / Math.max(0.001, this._D * 0.25)); }
       case 'sustain': return this._S * this._vel;
       case 'release': return this._v0 * Math.exp(-dt / Math.max(0.001, this._R * 0.25));
@@ -23,6 +36,126 @@ class _EnvTracker {
     const cur = this._at(now);
     this._phase = 'release'; this._t0 = now; this._v0 = cur; this._R = R;
     return cur;
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+//  ZDFFilterShim — wraps AudioWorkletNode with BiquadFilter-like API
+//  Presents .frequency, .Q, .type so all existing code keeps working.
+//  Falls back to BiquadFilter if worklet fails to load.
+// ─────────────────────────────────────────────────────────
+class ZDFFilterShim {
+  constructor(ctx) {
+    this.ctx = ctx;
+    this._type = 'lowpass';
+    this._frequency = 800;
+    this._Q = 0.7;
+    this._workletNode = null;
+    this._ready = false;
+
+    // Start with BiquadFilter as passthrough until worklet loads
+    this._biquad = ctx.createBiquadFilter();
+    this._biquad.type = 'lowpass';
+    this._biquad.frequency.value = 800;
+    this._biquad.Q.value = 5;
+
+    // Public AudioParam-like proxy objects
+    this.frequency = {
+      value: 800,
+      _shim: this,
+      setValueAtTime:            (v,t) => { this.frequency.value=v; this._setFreq(v,t,'setValueAtTime'); },
+      linearRampToValueAtTime:   (v,t) => { this.frequency.value=v; this._setFreq(v,t,'linearRampToValueAtTime'); },
+      exponentialRampToValueAtTime: (v,t) => { this.frequency.value=v; this._setFreq(v,t,'exponentialRampToValueAtTime'); },
+      setTargetAtTime:           (v,t,tc) => { this.frequency.value=v; this._setFreq(v,t,'setTargetAtTime',tc); },
+      cancelScheduledValues:     (t) => { this._biquad.frequency.cancelScheduledValues(t); if(this._workletNode) try{this._workletNode.parameters.get('cutoff').cancelScheduledValues(t);}catch(_){} },
+      cancelAndHoldAtTime:       (t) => { try{this._biquad.frequency.cancelAndHoldAtTime(t);}catch(_){} },
+      connect:                   (n) => { /* LFO connects go to worklet param once ready */ this._freqConnects = this._freqConnects||[]; this._freqConnects.push(n); this._biquad.frequency.connect(n); },
+      disconnect:                ()  => { try{this._biquad.frequency.disconnect();}catch(_){} if(this._workletNode)try{this._workletNode.parameters.get('cutoff').disconnect();}catch(_){} },
+    };
+    this.Q = {
+      value: 0.7,
+      _shim: this,
+      setValueAtTime:          (v,t) => { this.Q.value=v; this._setQ(v,t,'setValueAtTime'); },
+      linearRampToValueAtTime: (v,t) => { this.Q.value=v; this._setQ(v,t,'linearRampToValueAtTime'); },
+      setTargetAtTime:         (v,t,tc) => { this.Q.value=v; this._setQ(v,t,'setTargetAtTime',tc); },
+      cancelScheduledValues:   (t) => { this._biquad.Q.cancelScheduledValues(t); if(this._workletNode) try{this._workletNode.parameters.get('resonance').cancelScheduledValues(t);}catch(_){} },
+      cancelAndHoldAtTime:     (t) => { try{this._biquad.Q.cancelAndHoldAtTime(t);}catch(_){} },
+      connect:                 (n) => { this._biquad.Q.connect(n); },
+      disconnect:              ()  => { try{this._biquad.Q.disconnect();}catch(_){} },
+    };
+
+    // Expose .context for drawFilterCurve compat
+    this.context = ctx;
+    // Keep .numberOfInputs/.numberOfOutputs for connect/disconnect compat
+    this.numberOfInputs  = 1;
+    this.numberOfOutputs = 1;
+  }
+
+  get type() { return this._type; }
+  set type(v) {
+    this._type = v;
+    this._biquad.type = v === 'notch' ? 'notch' : v === 'highpass' ? 'highpass' : v === 'bandpass' ? 'bandpass' : 'lowpass';
+    if (this._workletNode) {
+      const t = v==='highpass'?1:v==='bandpass'?2:v==='notch'?3:0;
+      this._workletNode.parameters.get('filterType').setValueAtTime(t, this.ctx.currentTime);
+    }
+  }
+
+  _setFreq(v, t, method, tc) {
+    const clamped = Math.max(20, Math.min(20000, v));
+    try { tc !== undefined ? this._biquad.frequency[method](clamped,t,tc) : this._biquad.frequency[method](clamped,t); } catch(_) {}
+    if (this._workletNode) {
+      const p = this._workletNode.parameters.get('cutoff');
+      try { tc !== undefined ? p[method](clamped,t,tc) : p[method](clamped,t); } catch(_) {}
+    }
+  }
+  _setQ(v, t, method, tc) {
+    try { tc !== undefined ? this._biquad.Q[method](v,t,tc) : this._biquad.Q[method](v,t); } catch(_) {}
+    if (this._workletNode) {
+      const p = this._workletNode.parameters.get('resonance');
+      try { tc !== undefined ? p[method](v,t,tc) : p[method](v,t); } catch(_) {}
+    }
+  }
+
+  connect(dest, outIdx, inIdx) {
+    if (this._workletNode) { try{ this._workletNode.connect(dest,outIdx,inIdx); } catch(_){} }
+    else { try { this._biquad.connect(dest,outIdx,inIdx); } catch(_){} }
+    this._dest = { dest, outIdx, inIdx };
+    return dest;
+  }
+  disconnect() {
+    try{ this._biquad.disconnect(); } catch(_){}
+    if(this._workletNode) try{ this._workletNode.disconnect(); } catch(_){}
+  }
+
+  // Called by the voice to push the upstream node to our input
+  connectInput(src) {
+    this._src = src;
+    if (this._workletNode) { try { src.connect(this._workletNode); } catch(_){} }
+    else { try { src.connect(this._biquad); } catch(_){} }
+  }
+
+  // Once worklet is ready: swap biquad → workletNode in-place
+  _swapToWorklet(workletNode) {
+    this._workletNode = workletNode;
+    this._ready = true;
+
+    // Set initial params
+    const now = this.ctx.currentTime;
+    workletNode.parameters.get('cutoff').setValueAtTime(Math.max(20,Math.min(20000,this.frequency.value)), now);
+    workletNode.parameters.get('resonance').setValueAtTime(Math.max(0.01,this.Q.value), now);
+    const ft = this._type==='highpass'?1:this._type==='bandpass'?2:this._type==='notch'?3:0;
+    workletNode.parameters.get('filterType').setValueAtTime(ft, now);
+
+    // Re-wire signal chain: src → workletNode → dest
+    if (this._src && this._dest) {
+      try { this._src.disconnect(this._biquad); } catch(_) {}
+      try { this._biquad.disconnect(); } catch(_) {}
+      try { this._src.connect(workletNode); } catch(_) {}
+      const {dest, outIdx, inIdx} = this._dest;
+      try { workletNode.connect(dest, outIdx, inIdx); } catch(_) {}
+    }
+    console.log('[ZDF] Filter worklet active');
   }
 }
 
@@ -73,8 +206,8 @@ class WobblerVoice {
     };
 
     // Persistent nodes — created once, live for the session
-    this.filter     = ctx.createBiquadFilter();
-    this.filter.type = 'lowpass'; this.filter.frequency.value = 800; this.filter.Q.value = 5;
+    this.filter = new ZDFFilterShim(ctx);
+    this._initZDFWorklet();
     this.envGain    = ctx.createGain();    this.envGain.gain.value    = 0;
     this.outputGain = ctx.createGain();    this.outputGain.gain.value = 0.8;
     this.panner     = ctx.createStereoPanner(); this.panner.pan.value = 0;
@@ -111,8 +244,10 @@ class WobblerVoice {
     this._distPost.connect(this._distWet);
     this._distWet.connect(this.preAnalyser);
     this._distDry.connect(this.preAnalyser);
-    this.preAnalyser.connect(this.filter);
-    this.filter.connect(this.filterWet);
+    this.preAnalyser.connect(this.filter._biquad);
+    this.filter._biquad.connect(this.filterWet);
+    this.filter._src  = this.preAnalyser;
+    this.filter._dest = { dest: this.filterWet, outIdx: undefined, inIdx: undefined };
     this.filterWet.connect(this.envGain);
     this.filterDry.connect(this.envGain);
     this.envGain.connect(this.analyser);
@@ -180,17 +315,29 @@ class WobblerVoice {
     this._activeSubEnv   = null;
     this._liveOsc        = null;
 
-    this._noiseG = ctx.createGain(); this._noiseG.gain.value = 0;
-    // Noise filter mix: _noiseToFilt controls how much noise enters the filter chain;
-    // _noiseFilterBypass sends noise directly past the filter to envGain.
-    this._noiseToFilt      = ctx.createGain(); this._noiseToFilt.gain.value      = 1; // filterMix=1 default
-    this._noiseFilterBypass= ctx.createGain(); this._noiseFilterBypass.gain.value = 0; // filterMix=1 default
-    this._noiseG.connect(this._noiseToFilt);
+    // Noise chain: noiseNode → _noiseG(gain=1) → _noiseLvlGain(volume+LFO) → routing
+    this._noiseG = ctx.createGain(); this._noiseG.gain.value = 1;
+    this._noiseLvlGain = ctx.createGain(); this._noiseLvlGain.gain.value = 0;
+    this._noiseG.connect(this._noiseLvlGain);
+    // Noise filter mix
+    this._noiseToFilt      = ctx.createGain(); this._noiseToFilt.gain.value      = 1;
+    this._noiseFilterBypass= ctx.createGain(); this._noiseFilterBypass.gain.value = 0;
+    this._noiseLvlGain.connect(this._noiseToFilt);
     this._noiseToFilt.connect(this._distPre);
     this._noiseToFilt.connect(this._distDry);
-    this._noiseG.connect(this._noiseFilterBypass);
+    this._noiseLvlGain.connect(this._noiseFilterBypass);
     this._noiseFilterBypass.connect(this.envGain);
-    this._noiseNode = null; // created + started in startLFOs()
+    this._noiseNode = null;
+
+    // Dedicated noise LFO: modulates _noiseLvlGain.gain (not overwritten by setTargetAtTime)
+    this._noiseLfoOsc  = ctx.createOscillator();
+    this._noiseLfoGain = ctx.createGain();
+    this._noiseLfoOsc.type = 'sine';
+    this._noiseLfoOsc.frequency.value = 0;
+    this._noiseLfoGain.gain.value = 0;
+    this._noiseLfoOsc.connect(this._noiseLfoGain);
+    this._noiseLfoGain.connect(this._noiseLvlGain.gain);
+    this._noiseLfoOsc.start();
 
     this._srcs = []; this._playing = false; // legacy compat
 
@@ -279,6 +426,33 @@ class WobblerVoice {
   // Unison is now applied per-note in buildOscChain — this is a no-op kept for compat
   _applyUnisonDetune(_t) {}
 
+  // Load ZDF filter worklet and hot-swap once ready
+  _initZDFWorklet() {
+    const ctx = this.ctx;
+    // Only register the module once per AudioContext
+    if (!ctx._zdfWorkletLoading) {
+      ctx._zdfWorkletLoading = ctx.audioWorklet.addModule('js/zdf-filter-worklet.js')
+        .then(() => { ctx._zdfWorkletReady = true; })
+        .catch(e => { console.warn('[ZDF] Worklet load failed, staying on biquad:', e); ctx._zdfWorkletReady = false; });
+    }
+    // Once the module is registered, create a node for this voice
+    const doSwap = () => {
+      if (ctx._zdfWorkletReady === false) return; // failed — stay on biquad
+      try {
+        const node = new AudioWorkletNode(ctx, 'zdf-filter', { numberOfInputs:1, numberOfOutputs:1, outputChannelCount:[2] });
+        this.filter._swapToWorklet(node);
+      } catch(e) {
+        console.warn('[ZDF] Could not create worklet node:', e);
+      }
+    };
+    if (ctx._zdfWorkletReady === true) {
+      // Already loaded (e.g. second voice created after first)
+      setTimeout(doSwap, 0);
+    } else {
+      ctx._zdfWorkletLoading.then(doSwap).catch(() => {});
+    }
+  }
+
   // Connects a gain node to all active side-voice detune AudioParams (for 'chorus' target)
   _connectChorusNode(gainNode) {
     try { gainNode.disconnect(); } catch(_) {}
@@ -296,7 +470,7 @@ class WobblerVoice {
       case 'pan':       return this.panner.pan;
       case 'volume':    return this._tremoloGain.gain;
       case 'pitch':     return this._currentOscDetune || null;
-      case 'noiseAmt':  return this._currentNoiseGain || null;
+      case 'noiseAmt':  return this._noiseLvlGain.gain;
       default:          return filterBypassed ? null : this.filter.frequency;
     }
   }
@@ -318,6 +492,25 @@ class WobblerVoice {
     const mt = this._tweGetTarget(target);
     if (mt) { gainNode.connect(mt); return true; }
     return false;
+  }
+
+  // Build a PeriodicWave from standard waveform harmonics — needed to override
+  // a previously-set custom PeriodicWave, since o.type = x silently fails in Chrome
+  // after setPeriodicWave() has been called.
+  _makeStdWave(type) {
+    const H = 64; // number of harmonics
+    const real = new Float32Array(H + 1);
+    const imag = new Float32Array(H + 1);
+    for (let k = 1; k <= H; k++) {
+      switch (type) {
+        case 'sawtooth':  imag[k] = -2 / (Math.PI * k) * (k % 2 === 0 ? 1 : -1); break;
+        case 'square':    if (k % 2 !== 0) imag[k] = 4 / (Math.PI * k); break;
+        case 'triangle':  if (k % 2 !== 0) imag[k] = (k % 4 === 1 ? 1 : -1) * 8 / (Math.PI * Math.PI * k * k); break;
+        case 'sine':      if (k === 1) imag[k] = 1; break;
+        default:          if (k === 1) imag[k] = 1; break;
+      }
+    }
+    return this.ctx.createPeriodicWave(real, imag, { disableNormalization: false });
   }
 
   _makePeriodicWave(samples) {
@@ -773,9 +966,13 @@ class WobblerVoice {
     this._activeOsc1Envs = []; this._activeOsc2Envs = []; this._activeSubEnv = null;
 
     // Build OSC chain via new engine
+    const _cw1 = p.osc._customSamples?.length  ? this._makePeriodicWave(p.osc._customSamples)  : null;
+    const _cw2 = p.osc2?._customSamples?.length ? this._makePeriodicWave(p.osc2._customSamples) : null;
+    const _cws = p.sub?._customSamples?.length  ? this._makePeriodicWave(p.sub._customSamples)  : null;
     const oscParams = {
       osc1: {
         wave:   p.osc.waveform === 'pulse' ? 'square' : (p.osc.waveform === 'supersaw' ? 'sawtooth' : p.osc.waveform),
+        customWave: _cw1,
         oct:    p.osc.pitch ? Math.round(p.osc.pitch / 12) : 0,
         semi:   0,
         det:    0,
@@ -794,6 +991,7 @@ class WobblerVoice {
       },
       osc2: {
         wave:   p.osc2?.waveform || 'sine',
+        customWave: _cw2,
         oct:    p.osc2?.oct  || 0,
         semi:   p.osc2?.semi || 0,
         det:    p.osc2?.detune || 7,
@@ -812,6 +1010,7 @@ class WobblerVoice {
       },
       sub: {
         wave:   p.sub?.waveform || 'sine',
+        customWave: _cws,
         oct:    p.sub?.oct ?? -2,
         cents:  p.sub?.cents || 0,
         vol:    p.sub?.volume || 0.6,
@@ -834,6 +1033,7 @@ class WobblerVoice {
     applyOscEnvs(now, osc1Envs, osc2Envs, subEnv, oscParams);
 
     this._activeOscs     = oscs;
+    this._osc1Count      = Math.max(1, p.osc.unison || 1); // how many entries in _activeOscs are OSC1
     this._activeSubOsc   = subOscNode;
     this._activeOsc1Envs = osc1Envs;
     this._activeOsc2Envs = osc2Envs;
@@ -844,10 +1044,15 @@ class WobblerVoice {
     this._baseFreq = f; this._noteVelocity = velocity; this._playing = true;
     this._noteOnTime = now;
 
-    // Noise — persistent node, just update gain
-    this._noiseG.gain.cancelScheduledValues(now);
-    this._noiseG.gain.setTargetAtTime(p.noise.volume * velocity, now, 0.002);
-    this._currentNoiseGain = this._noiseG.gain;
+    // Noise — set base level on _noiseLvlGain; do NOT cancelScheduledValues (kills LFO modulation)
+    const _noiseVol = p.noise.volume * velocity;
+    this._applyNoiseEnv(_noiseVol, p.noise.envShape, now, p.adsr);
+    this._currentNoiseGain = this._noiseLvlGain.gain;
+    // Apply pitch via playbackRate (semitones)
+    if (this._noiseNode) {
+      const pr = Math.pow(2, (p.noise.pitch ?? 0) / 12);
+      this._noiseNode.playbackRate.setTargetAtTime(pr, now, 0.01);
+    }
 
     // LFO reconnection for pitch / noiseAmt targets + LFO envelope attack
     for (let i = 0; i < this.lfoNodes.length; i++) {
@@ -856,7 +1061,7 @@ class WobblerVoice {
       const t = lp.target;
       if (lp._enabled === false) { try { lfo.gain.disconnect(); } catch(_){} continue; }
       if (t === 'pitch' && this._liveOsc)    { try { lfo.gain.disconnect(); } catch(_){} lfo.gain.connect(this._liveOsc.detune); lfo.connected = 'pitch'; }
-      if (t === 'noiseAmt') { try { lfo.gain.disconnect(); } catch(_){} lfo.gain.connect(this._noiseG.gain);    lfo.connected = 'noiseAmt'; }
+      if (t === 'noiseAmt') { try { lfo.gain.disconnect(); } catch(_){} lfo.gain.connect(this._noiseLvlGain.gain); lfo.connected = 'noiseAmt'; }
       if (t === 'chorus')   { this._connectChorusNode(lfo.gain); lfo.connected = 'chorus'; }
       // LFO envelope: if envA > 0 ramp depth in from 0 over attack
       const applied = lp.target === 'cutoff' ? Math.min(lp.depth, Math.max(0, this.p.filter.cutoff - 20)) : lp.depth;
@@ -936,7 +1141,7 @@ class WobblerVoice {
     releaseOscEnvs(now, this._activeOsc1Envs, this._activeOsc2Envs, this._activeSubEnv, _oscP);
     const stopAt = now + rel + 0.1;
     stopOscs(this._activeOscs, this._activeSubOsc, stopAt);
-    this._noiseG.gain.setTargetAtTime(0, now + rel + 0.05, 0.01);
+    this._noiseLvlGain.gain.setTargetAtTime(0, now + rel + 0.05, 0.01);
     this.filter.frequency.setTargetAtTime(p.filter.cutoff, now, rel / 3);
     for (let i = 0; i < this.lfoNodes.length; i++) {
       const lfo = this.lfoNodes[i];
@@ -978,6 +1183,41 @@ class WobblerVoice {
     if (this._heldSlots.size === 0) this.noteOff();
   }
 
+  // Apply noise volume + envShape envelope to _noiseLvlGain.gain at noteOn.
+  // envShape: 'none'|'fade-up'|'fade-down'|'fade-out'
+  // Uses ADSR attack/release times so envelope feels related to voice envelope.
+  _applyNoiseEnv(targetVol, envShape, now, adsr) {
+    const g = this._noiseLvlGain.gain;
+    const lfoRate = this.p.noise.lfoRate ?? 0;
+    const lfoDepth = lfoRate > 0 ? targetVol * 0.5 : 0;
+    // Update LFO gain to match current volume (only if needed, no rate change)
+    this._noiseLfoGain.gain.setTargetAtTime(lfoDepth, now, 0.02);
+
+    const atk = Math.max(0.05, adsr?.attack  ?? 0.05);
+    const rel = Math.max(0.1,  adsr?.release ?? 0.12);
+
+    switch (envShape) {
+      case 'fade-up':
+        // Start silent, ramp up over attack time
+        g.setValueAtTime(0, now);
+        g.linearRampToValueAtTime(targetVol, now + atk);
+        break;
+      case 'fade-down':
+        // Start at full, fade down over release time
+        g.setValueAtTime(targetVol, now);
+        g.linearRampToValueAtTime(0, now + rel);
+        break;
+      case 'fade-out':
+        // Start at full, hold briefly, then fade to zero over release
+        g.setValueAtTime(targetVol, now);
+        g.setTargetAtTime(0, now + atk * 0.5, rel * 0.5);
+        break;
+      default: // 'none'
+        g.setTargetAtTime(targetVol, now, 0.005);
+        break;
+    }
+  }
+
   _killSrcs() {
     // Persistent oscs never stop — this is intentionally a no-op
     this._srcs.splice(0);
@@ -994,11 +1234,25 @@ class WobblerVoice {
         if (this._activeSubOsc) { try { this._activeSubOsc.frequency.setTargetAtTime(newFreq, t, 0.01); } catch(_) {} }
       }
       if (key === 'waveform') {
-        const webType = val === 'pulse' ? 'square' : val === 'supersaw' ? 'sawtooth' : val;
-        (this._activeOscs || []).forEach(o => {
+        // Clear custom samples so next noteOn uses the standard wave type
+        this.p.osc._customSamples = null;
+        // Only patch OSC1 nodes (first _osc1Count entries in _activeOscs)
+        const n1 = this._osc1Count || 1;
+        const osc1Nodes = (this._activeOscs || []).slice(0, n1);
+        // Always use setPeriodicWave — o.type assignment silently fails in Chrome
+        // after setPeriodicWave() was previously called on the oscillator node.
+        const _stdWave = (val === 'pulse' || val === 'supersaw')
+          ? null
+          : this._makeStdWave(val);
+        osc1Nodes.forEach(o => {
           try {
-            if (val === 'pulse') { o.setPeriodicWave(this._makePulseWave(this.p.osc.pw ?? 0.5)); }
-            else { o.type = webType; }
+            if (val === 'pulse') {
+              o.setPeriodicWave(this._makePulseWave(this.p.osc.pw ?? 0.5));
+            } else if (val === 'supersaw') {
+              o.setPeriodicWave(this._makeStdWave('sawtooth'));
+            } else {
+              o.setPeriodicWave(_stdWave);
+            }
           } catch(_) {}
         });
       }
@@ -1009,12 +1263,42 @@ class WobblerVoice {
           (this._activeOscs || []).forEach(o => { try { o.setPeriodicWave(wave); } catch(_) {} });
         }
       }
+      // volume is applied on next noteOn via oscParams — no live patch needed
+    }
+    if (section === 'osc2') {
+      if (!this.p.osc2) this.p.osc2 = {};
+      this.p.osc2[key] = val;
+      if (key === 'waveform' && this._activeOscs && this._activeOscs[1]) {
+        const o = this._activeOscs[1];
+        try { o.type = val === 'pulse' ? 'square' : val === 'supersaw' ? 'sawtooth' : val; } catch(_) {}
+      }
+    }
+    if (section === 'sub') {
+      if (!this.p.sub) this.p.sub = {};
+      this.p.sub[key] = val;
+      if (key === 'waveform' && this._activeSubOsc) {
+        try { this._activeSubOsc.type = val === 'pulse' ? 'square' : val; } catch(_) {}
+      }
     }
     if (section === 'noise') {
       this.p.noise[key] = val;
-      if (key === 'volume' && this._currentNoiseGain) {
-        this._currentNoiseGain.setTargetAtTime(val * (this._noteVelocity || 0.65), t, 0.01);
+      if (key === 'volume') {
+        const lvl = val * (this._noteVelocity || 0.7);
+        this._noiseLvlGain.gain.setTargetAtTime(lvl, t, 0.01);
+        if ((this.p.noise.lfoRate ?? 0) > 0) {
+          this._noiseLfoGain.gain.setTargetAtTime(lvl * 0.5, t, 0.01);
+        }
       }
+      if (key === 'lfoRate') {
+        this._noiseLfoOsc.frequency.setTargetAtTime(Math.max(0.01, val), t, 0.01);
+        const lvl = (this.p.noise.volume ?? 0) * (this._noteVelocity || 0.7);
+        this._noiseLfoGain.gain.setTargetAtTime(val > 0 ? lvl * 0.5 : 0, t, 0.01);
+      }
+      if (key === 'pitch' && this._noiseNode) {
+        const pr = Math.pow(2, val / 12);
+        this._noiseNode.playbackRate.setTargetAtTime(pr, t, 0.01);
+      }
+      if (key === 'envShape') { /* stored in p.noise.envShape — applied on next noteOn */ }
       if (key === 'filterMix') {
         const t = this.ctx.currentTime;
         this._noiseToFilt.gain.setTargetAtTime(val, t, 0.01);
@@ -1033,7 +1317,16 @@ class WobblerVoice {
         this._noiseNode = nn;
       }
     }
-    if (section === 'adsr')  this.p.adsr[key] = val;
+    if (section === 'adsr') {
+      this.p.adsr[key] = val;
+      // Live-update filter envelope peak if attack/decay/sustain changes while note held
+      if (this._playing && (key === 'attack' || key === 'decay' || key === 'sustain')) {
+        const base = this.p.filter.cutoff;
+        const peak = Math.min(18000, base + this.p.filter.envAmount * (this._noteVelocity || 0.65));
+        if (key === 'attack') this.filter.frequency.linearRampToValueAtTime(peak, t + Math.max(0.001, val));
+        if (key === 'decay')  this.filter.frequency.setTargetAtTime(base + (peak - base) * this.p.adsr.sustain, t, Math.max(0.001, val) / 4);
+      }
+    }
     if (section === 'filter') {
       this.p.filter[key] = val;
       if (key === 'type')      this.filter.type = val;

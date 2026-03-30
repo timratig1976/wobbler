@@ -103,15 +103,16 @@ function drawLiveWaveform(canvas, buf, color) {
 // ─────────────────────────────────────────────────────────
 //  Knob — canvas rotary, drag up/down, dblclick to type
 // ─────────────────────────────────────────────────────────
-function makeKnob({ parent, min, max, value, label, unit='', decimals=1, step=0, color='#00ffb2', onChange, defaultValue, log=false }) {
-  const dpr = window.devicePixelRatio || 1, S = 68;
+function makeKnob({ parent, min, max, value, label, unit='', decimals=1, step=0, color='#00ffb2', onChange, defaultValue, log=false, size, hideLabels=false }) {
+  const dpr = window.devicePixelRatio || 1, S = size || 68;
   const wrap = document.createElement('div'); wrap.className = 'knob-wrap';
   const canvas = document.createElement('canvas');
   canvas.width = S*dpr; canvas.height = S*dpr;
   canvas.style.cssText = `width:${S}px;height:${S}px;display:block;margin:0 auto`;
-  canvas.title = 'Drag: adjust | Dblclick: type value | Ctrl+Click: reset to default';
+  canvas.title = `${label} — Drag: adjust | Dblclick: type value | Ctrl+Click: reset`;
   const valEl = document.createElement('div'); valEl.className = 'knob-val';
   const lblEl = document.createElement('div'); lblEl.className = 'knob-lbl'; lblEl.textContent = label;
+  if (hideLabels) { valEl.style.display='none'; lblEl.style.display='none'; }
   wrap.append(canvas, valEl, lblEl); parent.appendChild(wrap);
 
   const c = canvas.getContext('2d'); c.scale(dpr, dpr);
@@ -128,25 +129,26 @@ function makeKnob({ parent, min, max, value, label, unit='', decimals=1, step=0,
   }
   let modNorm = null; // null = no modulation display
   function draw() {
-    const n = toNorm(val), CX=S/2, CY=S/2, R=24;
+    const sc = S / 68; // scale factor relative to default 68px
+    const n = toNorm(val), CX=S/2, CY=S/2, R=24*sc;
     const a0 = 0.75*Math.PI, sweep = 1.5*Math.PI, a1 = a0 + n*sweep;
     c.clearRect(0,0,S,S);
-    c.lineCap = 'round'; c.lineWidth = 4;
+    c.lineCap = 'round'; c.lineWidth = 4*sc;
     c.beginPath(); c.arc(CX,CY,R,a0,a0+sweep); c.strokeStyle='#1c1c3a'; c.stroke();
     if (n > 0.005) { c.beginPath(); c.arc(CX,CY,R,a0,a1); c.strokeStyle=color; c.stroke(); }
-    c.beginPath(); c.arc(CX,CY,6,0,Math.PI*2); c.fillStyle='#12122a'; c.fill();
-    const ix=CX+(R-8)*Math.cos(a1), iy=CY+(R-8)*Math.sin(a1);
-    c.beginPath(); c.arc(ix,iy,3.5,0,Math.PI*2); c.fillStyle='#fff'; c.fill();
+    c.beginPath(); c.arc(CX,CY,6*sc,0,Math.PI*2); c.fillStyle='#12122a'; c.fill();
+    const ix=CX+(R-8*sc)*Math.cos(a1), iy=CY+(R-8*sc)*Math.sin(a1);
+    c.beginPath(); c.arc(ix,iy,3.5*sc,0,Math.PI*2); c.fillStyle='#fff'; c.fill();
     // Modulation ring — outer dot showing live modulated position
     if (modNorm !== null) {
-      const Rm = R + 5, nm = Math.max(0, Math.min(1, modNorm));
+      const Rm = R + 5*sc, nm = Math.max(0, Math.min(1, modNorm));
       const am = a0 + nm * sweep;
       const mx = CX + Rm * Math.cos(am), my = CY + Rm * Math.sin(am);
       c.save();
       c.beginPath(); c.arc(CX,CY,Rm,a0,a0+sweep);
-      c.strokeStyle='rgba(255,255,255,0.08)'; c.lineWidth=1.5; c.stroke();
+      c.strokeStyle='rgba(255,255,255,0.08)'; c.lineWidth=1.5*sc; c.stroke();
       c.shadowColor = color; c.shadowBlur = 6;
-      c.beginPath(); c.arc(mx,my,2.5,0,Math.PI*2);
+      c.beginPath(); c.arc(mx,my,2.5*sc,0,Math.PI*2);
       c.fillStyle = color; c.globalAlpha = 0.9; c.fill();
       c.restore();
     }
@@ -235,7 +237,9 @@ function drawFilterCurve(canvas, filterNode, color, envAmount = 0, modCutoff = n
   const dpr = window.devicePixelRatio || 1;
   const W = canvas.offsetWidth || 260, H = canvas.offsetHeight || 90;
   if (!W || !H) return;
-  canvas.width = W * dpr; canvas.height = H * dpr;
+  if (canvas.width !== W * dpr || canvas.height !== H * dpr) {
+    canvas.width = W * dpr; canvas.height = H * dpr;
+  }
   const c = canvas.getContext('2d');
   c.setTransform(dpr, 0, 0, dpr, 0, 0);
 
@@ -246,6 +250,7 @@ function drawFilterCurve(canvas, filterNode, color, envAmount = 0, modCutoff = n
   const dBtoY   = db => Math.max(1, Math.min(H-1, H - (db - DB_BOT) / (DB_TOP - DB_BOT) * H));
 
   // ── Background ───────────────────────────────────────
+  c.clearRect(0, 0, W, H);
   c.fillStyle = '#06060f'; c.fillRect(0, 0, W, H);
 
   // Grid verticals (frequency markers)
@@ -405,9 +410,11 @@ function drawFilterCurve(canvas, filterNode, color, envAmount = 0, modCutoff = n
 // ─────────────────────────────────────────────────────────
 function drawNoisePreview(canvas, type, color) {
   const dpr = window.devicePixelRatio || 1;
-  const W = canvas.offsetWidth || 64, H = canvas.offsetHeight || 60;
+  const rect = canvas.getBoundingClientRect();
+  const W = rect.width || canvas.offsetWidth || 64;
+  const H = parseFloat(canvas.style.height) || rect.height || canvas.offsetHeight || 90;
   if (!W || !H) return;
-  canvas.width = W * dpr; canvas.height = H * dpr;
+  canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
   const c = canvas.getContext('2d'); c.scale(dpr, dpr);
   c.fillStyle = '#0a0a18'; c.fillRect(0, 0, W, H);
   c.strokeStyle = 'rgba(255,255,255,0.07)';
@@ -461,48 +468,86 @@ function drawNoisePreview(canvas, type, color) {
   c.stroke();
 }
 
-// Noise panel component (right column of OSC section)
+// Noise panel component — mirrors filter section layout
 function createNoisePanel({ voice, color }) {
   const p = voice.p;
   const wrap = document.createElement('div'); wrap.className = 'osc-noise-strip';
   wrap.style.setProperty('--accent', color);
 
-  // Two-column layout: controls left, canvas right (mirror filter/ADSR)
-  const noiseCols = document.createElement('div'); noiseCols.className = 'noise-cols';
-  const noiseLeft  = document.createElement('div'); noiseLeft.className  = 'noise-left';
-  const noiseRight = document.createElement('div'); noiseRight.className = 'noise-right';
-  noiseCols.append(noiseLeft, noiseRight);
-  wrap.appendChild(noiseCols);
+  // ── Outer flex: LEFT=knobs+ENV, RIGHT=canvas+selector ────
+  const inner = document.createElement('div');
+  inner.style.cssText = 'display:flex;gap:6px;align-items:stretch';
+  wrap.appendChild(inner);
 
-  // Left: header label + type nav row
-  const noiseHdrLbl = document.createElement('span'); noiseHdrLbl.className = 'noise-strip-lbl'; noiseHdrLbl.textContent = 'NOISE';
-  noiseLeft.appendChild(noiseHdrLbl);
+  // LEFT: knob row + ENV 2×2 to the right of LFO (flex:1)
+  const noiseLeft = document.createElement('div');
+  noiseLeft.style.cssText = 'flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center';
+  inner.appendChild(noiseLeft);
 
-  const typeRow = document.createElement('div'); typeRow.className = 'noise-type-row';
-  const prevBtn = document.createElement('button'); prevBtn.className = 'noise-nav-btn'; prevBtn.textContent = '<';
-  const typeLbl = document.createElement('span'); typeLbl.className = 'noise-strip-type-lbl';
-  typeLbl.textContent = NOISE_LABELS[NOISE_TYPES.indexOf(p.noise.type)] || 'White';
-  const nextBtn = document.createElement('button'); nextBtn.className = 'noise-nav-btn'; nextBtn.textContent = '>';
-  typeRow.append(prevBtn, typeLbl, nextBtn);
-  noiseLeft.appendChild(typeRow);
+  // Single horizontal flex: knobs then ENV grid
+  const knobEnvRow = document.createElement('div');
+  knobEnvRow.style.cssText = 'display:flex;gap:2px;align-items:flex-end';
+  noiseLeft.appendChild(knobEnvRow);
 
-  // Left: level knob + filter mix knob
-  const knobRow = document.createElement('div'); knobRow.className = 'knob-row';
-  const _lvlKnob = makeKnob({ parent: knobRow, min: 0, max: 1, value: p.noise.volume, label: 'LEVEL', decimals: 2, color,
-    onChange: v => voice.set('noise', 'volume', v) });
+  // Knobs (size:46 with labels), left-aligned
+  const _lvlKnob = makeKnob({ parent:knobEnvRow, min:0, max:1,    value:p.noise.volume,      label:'LVL',  decimals:2, color,          size:46, onChange: v => voice.set('noise','volume',v) });
   voice._noiseKnob = _lvlKnob;
-  makeKnob({ parent: knobRow, min: 0, max: 1, value: p.noise.filterMix ?? 1, label: 'FILT', decimals: 2, color: '#aaaaff',
-    onChange: v => voice.set('noise', 'filterMix', v) });
-  noiseLeft.appendChild(knobRow);
+  makeKnob({ parent:knobEnvRow, min:0,   max:1,    value:p.noise.filterMix??1, label:'FILT', decimals:2, color:'#aaaaff', size:46, onChange: v => voice.set('noise','filterMix',v) });
+  makeKnob({ parent:knobEnvRow, min:-24, max:24,   value:p.noise.pitch??0,     label:'PTCH', decimals:0, color:'#88aaff', size:46, onChange: v => voice.set('noise','pitch',v) });
+  makeKnob({ parent:knobEnvRow, min:0,   max:20,   value:p.noise.lfoRate??0,   label:'LFO',  decimals:1, color:'#cc88ff', size:46, onChange: v => voice.set('noise','lfoRate',v) });
 
-  // Right: noise waveform preview canvas
-  const canvas = document.createElement('canvas'); canvas.className = 'noise-preview';
+  // ENV 2×2 grid — right of LFO knob, vertically centered
+  const ENV_SHAPES = ['none','fade-up','fade-down','fade-out'];
+  const ENV_LABELS = ['—', '↑', '↓', '⌣'];
+  const ENV_TITLES = ['None','Fade Up','Fade Down','Fade Out'];
+  if (!p.noise.envShape) p.noise.envShape = 'none';
+  const envGrid = document.createElement('div');
+  envGrid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:3px;align-self:center;margin-left:3px';
+  const envBtns = ENV_SHAPES.map((sh, i) => {
+    const b = document.createElement('button');
+    b.className = 'ftype-btn' + (p.noise.envShape === sh ? ' active' : '');
+    b.textContent = ENV_LABELS[i];
+    b.title = ENV_TITLES[i];
+    b.style.cssText = `padding:3px 6px;font-size:11px;letter-spacing:1px;border-color:${p.noise.envShape===sh?color:'#2a2a44'};color:${p.noise.envShape===sh?color:'#555'}`;
+    b.addEventListener('click', () => {
+      p.noise.envShape = sh;
+      envBtns.forEach((x,j) => { x.style.borderColor=ENV_SHAPES[j]===sh?color:'#2a2a44'; x.style.color=ENV_SHAPES[j]===sh?color:'#555'; });
+      voice.set('noise','envShape',sh);
+    });
+    envGrid.appendChild(b);
+    return b;
+  });
+  knobEnvRow.appendChild(envGrid);
+
+  // RIGHT: canvas + pattern selector below (50%)
+  const noiseRight = document.createElement('div');
+  noiseRight.style.cssText = 'flex:0 0 50%;max-width:50%;display:flex;flex-direction:column;gap:0';
+  inner.appendChild(noiseRight);
+
+  const canvas = document.createElement('canvas');
+  canvas.className = 'noise-preview';
+  canvas.style.cssText = 'display:block;width:100%;height:90px;background:#06060f;border-radius:4px 4px 0 0;border:1px solid #1a1a30;border-bottom:none';
   noiseRight.appendChild(canvas);
   requestAnimationFrame(() => drawNoisePreview(canvas, p.noise.type, color));
 
+  // Pattern selector — below canvas
+  const typeRow = document.createElement('div');
+  typeRow.style.cssText = 'display:flex;align-items:center;background:#080814;border:1px solid #1a1a30;border-top:none;border-radius:0 0 4px 4px;padding:2px 4px;gap:3px';
+  const prevBtn = document.createElement('button');
+  prevBtn.style.cssText = 'background:none;border:none;color:#666;font-size:13px;cursor:pointer;padding:0 2px;line-height:1';
+  prevBtn.textContent = '‹';
+  const typeLbl = document.createElement('span');
+  typeLbl.style.cssText = 'flex:1;text-align:center;font-size:9px;color:#aaa;letter-spacing:1px';
+  typeLbl.textContent = NOISE_LABELS[NOISE_TYPES.indexOf(p.noise.type)] || 'White';
+  const nextBtn = document.createElement('button');
+  nextBtn.style.cssText = 'background:none;border:none;color:#666;font-size:13px;cursor:pointer;padding:0 2px;line-height:1';
+  nextBtn.textContent = '›';
+  typeRow.append(prevBtn, typeLbl, nextBtn);
+  noiseRight.appendChild(typeRow);
+
   const setType = (type) => {
     typeLbl.textContent = NOISE_LABELS[NOISE_TYPES.indexOf(type)];
-    voice.set('noise', 'type', type); // handles p.noise.type, cache invalidation, AND live node hot-swap
+    voice.set('noise', 'type', type);
     requestAnimationFrame(() => drawNoisePreview(canvas, type, color));
   };
   prevBtn.addEventListener('click', () => { const i=NOISE_TYPES.indexOf(p.noise.type); setType(NOISE_TYPES[(i-1+NOISE_TYPES.length)%NOISE_TYPES.length]); });
