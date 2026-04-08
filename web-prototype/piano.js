@@ -6,13 +6,12 @@
 // ─────────────────────────────────────────────────────────
 
 function buildPianoKeyboard(container, synth) {
-  const START_MIDI = 48; // C3
-  const NUM_OCTAVES = 2;
+  const START_MIDI = 36; // C2
+  const NUM_OCTAVES = 3;
   const W = 36, BW = 22, WH = 90, BH = 55; // white/black key dimensions
 
   // Which semitones within an octave are white/black
   const WHITE_SEMI = [0, 2, 4, 5, 7, 9, 11];
-  const BLACK_MAP  = { 1: 0, 3: 1, 6: 3, 8: 4, 10: 5 }; // semitone → gap after white key index
 
   // Build note list: { midi, isBlack, leftPx }
   const notes = [];
@@ -25,9 +24,11 @@ function buildPianoKeyboard(container, synth) {
         notes.push({ midi, isBlack: false, leftPx: whiteCount * W });
         whiteCount++;
       } else {
-        // left edge = boundary between two white keys - BW/2
+        // Black key sits between two white keys:
+        // whiteIdx = number of white keys to the left of this black key (globally)
         const whiteIdx = WHITE_SEMI.filter(s => s < semi).length + oct * 7;
-        notes.push({ midi, isBlack: true, leftPx: whiteIdx * W - BW / 2 });
+        // Center between whiteIdx and whiteIdx+1: whiteIdx*W + W - BW/2
+        notes.push({ midi, isBlack: true, leftPx: whiteIdx * W + W - BW / 2 });
       }
     }
   }

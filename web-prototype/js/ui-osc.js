@@ -115,7 +115,7 @@ function buildOscSection(container, { voice, p, oscMode, color }) {
   // ── Drag-param helper ─────────────────────────────────────
   function makeDragParam({ parent, label, value, min, max, decimals=0, unit='', step=1, onChange }) {
     const wrap = document.createElement('div');
-    wrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;flex:1;cursor:ns-resize;user-select:none';
+    wrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;flex:1;cursor:ns-resize;user-select:none;position:relative';
     const lbl = document.createElement('div');
     lbl.style.cssText = 'font-size:9px;color:#555;letter-spacing:1px;margin-bottom:1px';
     lbl.textContent = label;
@@ -123,17 +123,87 @@ function buildOscSection(container, { voice, p, oscMode, color }) {
     val.style.cssText = `font-size:12px;color:${color};font-family:monospace;letter-spacing:1px`;
     val.textContent = (decimals>0 ? value.toFixed(decimals) : Math.round(value)) + unit;
     let current = value, startY = 0, startV = 0;
-    wrap.addEventListener('pointerdown', e => { wrap.setPointerCapture(e.pointerId); startY=e.clientY; startV=current; });
+    wrap.addEventListener('pointerdown', e => {
+      if (e.target === rangeBar || e.target === rangeLoHandle || e.target === rangeHiHandle) return;
+      wrap.setPointerCapture(e.pointerId); startY=e.clientY; startV=current;
+    });
     wrap.addEventListener('pointermove', e => {
       if (e.buttons===0) return;
+      if (e.target === rangeBar || e.target === rangeLoHandle || e.target === rangeHiHandle) return;
       const delta = (startY - e.clientY) * step * 0.5;
       current = Math.max(min, Math.min(max, startV + delta));
       val.textContent = (decimals>0 ? current.toFixed(decimals) : Math.round(current)) + unit;
       onChange(decimals>0 ? current : Math.round(current));
     });
-    wrap.append(lbl, val);
+    // Mod badge — shown below value when LFO is active on this param
+    const modBadge = document.createElement('div');
+    modBadge.style.cssText = `font-size:8px;font-family:monospace;letter-spacing:1px;color:${color};opacity:0;transition:opacity 0.15s;text-shadow:0 0 6px ${color};margin-top:1px`;
+    // Mod range bar — thin horizontal bar with lo/hi draggable handles
+    const rangeBar = document.createElement('div');
+    rangeBar.style.cssText = 'position:relative;width:80%;height:3px;background:#1c1c3a;border-radius:2px;margin-top:2px;display:none;cursor:default';
+    const rangeFill = document.createElement('div');
+    rangeFill.style.cssText = 'position:absolute;top:0;height:100%;border-radius:2px;pointer-events:none';
+    const rangeLoHandle = document.createElement('div');
+    rangeLoHandle.style.cssText = 'position:absolute;top:-3px;width:3px;height:9px;border-radius:1px;background:#fff;cursor:ew-resize;transform:translateX(-50%)';
+    const rangeHiHandle = document.createElement('div');
+    rangeHiHandle.style.cssText = 'position:absolute;top:-3px;width:3px;height:9px;border-radius:1px;cursor:ew-resize;transform:translateX(-50%)';
+    rangeBar.append(rangeFill, rangeLoHandle, rangeHiHandle);
+
+    let _modRange = null;
+    function _updateRangeBar() {
+      if (!_modRange) { rangeBar.style.display = 'none'; return; }
+      rangeBar.style.display = 'block';
+      const lo = Math.max(0, Math.min(1, _modRange.lo));
+      const hi = Math.max(0, Math.min(1, _modRange.hi));
+      rangeFill.style.left  = (Math.min(lo,hi)*100)+'%';
+      rangeFill.style.width = (Math.abs(hi-lo)*100)+'%';
+      rangeFill.style.background = _modRange.color || color;
+      rangeLoHandle.style.left = (lo*100)+'%';
+      rangeHiHandle.style.left = (hi*100)+'%';
+      rangeHiHandle.style.background = _modRange.color || color;
+    }
+    function _makeHandleDrag(which) {
+      rangeLoHandle.addEventListener('pointerdown', e => {
+        if (which !== 'lo') return;
+        e.stopPropagation(); rangeLoHandle.setPointerCapture(e.pointerId);
+        const onMove = ev => {
+          const rect = rangeBar.getBoundingClientRect();
+          _modRange.lo = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+          _modRange.onChange?.(_modRange.lo, _modRange.hi);
+          _updateRangeBar();
+        };
+        const onUp = () => { rangeLoHandle.removeEventListener('pointermove',onMove); rangeLoHandle.removeEventListener('pointerup',onUp); };
+        rangeLoHandle.addEventListener('pointermove',onMove); rangeLoHandle.addEventListener('pointerup',onUp);
+      });
+      rangeHiHandle.addEventListener('pointerdown', e => {
+        if (which !== 'hi') return;
+        e.stopPropagation(); rangeHiHandle.setPointerCapture(e.pointerId);
+        const onMove = ev => {
+          const rect = rangeBar.getBoundingClientRect();
+          _modRange.hi = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+          _modRange.onChange?.(_modRange.lo, _modRange.hi);
+          _updateRangeBar();
+        };
+        const onUp = () => { rangeHiHandle.removeEventListener('pointermove',onMove); rangeHiHandle.removeEventListener('pointerup',onUp); };
+        rangeHiHandle.addEventListener('pointermove',onMove); rangeHiHandle.addEventListener('pointerup',onUp);
+      });
+    }
+    _makeHandleDrag('lo'); _makeHandleDrag('hi');
+
+    wrap.append(lbl, val, modBadge, rangeBar);
     parent.appendChild(wrap);
-    return { setValue: v => { current=v; val.textContent=(decimals>0?v.toFixed(decimals):Math.round(v))+unit; } };
+    return {
+      setValue:    v  => { current=v; val.textContent=(decimals>0?v.toFixed(decimals):Math.round(v))+unit; },
+      setModLabel: tx => {
+        if (tx === null) { modBadge.style.opacity='0'; modBadge.textContent=''; }
+        else             { modBadge.textContent=tx; modBadge.style.opacity='1'; }
+      },
+      setModRange(lo, hi, rangeColor, onChange) {
+        _modRange = { lo: Math.max(0,Math.min(1,lo)), hi: Math.max(0,Math.min(1,hi)), color: rangeColor, onChange };
+        _updateRangeBar();
+      },
+      clearModRange() { _modRange = null; _updateRangeBar(); },
+    };
   }
 
   // ── Middle row: [UNISON left] [Wavetable canvas right 50%] ──
@@ -373,12 +443,33 @@ function buildOscSection(container, { voice, p, oscMode, color }) {
 
   if (isOsc1) {
     makeDragParam({ parent:paramRow, label:'OCT',   value:Math.round((p.osc.pitch??0)/12),  min:-4,  max:4,   unit:'',  step:1,    onChange: v => voice.set('osc','pitch',v*12) });
-    makeDragParam({ parent:paramRow, label:'SEM',   value:Math.round((p.osc.pitch??0)%12),  min:-12, max:12,  unit:'',  step:1,    onChange: v => voice.set('osc','pitch',Math.round((p.osc.pitch??0)/12)*12+v) });
-    makeDragParam({ parent:paramRow, label:'FIN',   value:p.osc.cent??0,                    min:-100,max:100, unit:'¢', step:1,    onChange: v => voice.set('osc','cent',v) });
+    const semParam = makeDragParam({ parent:paramRow, label:'SEM',   value:Math.round((p.osc.pitch??0)%12),  min:-12, max:12,  unit:'',  step:1,    onChange: v => voice.set('osc','pitch',Math.round((p.osc.pitch??0)/12)*12+v) });
+    const finParam = makeDragParam({ parent:paramRow, label:'FIN',   value:p.osc.cent??0,  min:-100,max:100, unit:'¢', step:1,    onChange: v => voice.set('osc','cent',v) });
+    voice._semParam = semParam;
+    voice._finParam = finParam;
+    // SEM mod badge — shows ±N semitone offset when semi LFO active
+    voice._semiModUpdate = (semi) => {
+      if (semi === null) { semParam.setModLabel(null); }
+      else { const sign = semi >= 0 ? '+' : ''; semParam.setModLabel(`${sign}${semi}st`); }
+    };
+    // FIN / PITCH mod badge — shows ±Xc offset when pitch or fine LFO active
+    voice._pitchModUpdate = (cents) => {
+      if (cents === null) {
+        finParam.setModLabel(null);
+      } else {
+        const sign = cents >= 0 ? '+' : '';
+        finParam.setModLabel(`${sign}${Math.round(cents)}¢`);
+      }
+    };
     const pwWrap = document.createElement('div'); pwWrap.style.cssText='flex:1;display:'+(p.osc.waveform==='pulse'?'flex':'none');
     makeDragParam({ parent:pwWrap,   label:'PW',    value:p.osc.pw??0.5,                    min:0.1, max:0.9, decimals:2, step:0.01, onChange: v => voice.set('osc','pw',v) });
     paramRow.appendChild(pwWrap);
-    makeDragParam({ parent:paramRow, label:'LEVEL', value:p.osc.volume??0.8,                min:0,   max:1,   decimals:2, step:0.01, onChange: v => voice.set('osc','volume',v) });
+    const levelParam = makeDragParam({ parent:paramRow, label:'LEVEL', value:p.osc.volume??0.8, min:0, max:1, decimals:2, step:0.01, onChange: v => voice.set('osc','volume',v) });
+    voice._levelParam = levelParam;
+    voice._tremoloModUpdate = (gain) => {
+      if (gain === null) { levelParam.setModLabel(null); }
+      else { levelParam.setModLabel((gain * 100).toFixed(0) + '%'); }
+    };
     waveSelect.addEventListener('change', () => { pwWrap.style.display = waveSelect.value==='pulse'?'flex':'none'; });
   } else if (isOsc2) {
     makeDragParam({ parent:paramRow, label:'OCT',   value:p.osc2.oct??0,     min:-4,  max:4,   unit:'',  step:1,    onChange: v => { p.osc2.oct=v; } });
@@ -392,10 +483,8 @@ function buildOscSection(container, { voice, p, oscMode, color }) {
     makeDragParam({ parent:paramRow, label:'LEVEL', value:p.sub.volume??0.6, min:0,   max:1,   decimals:2, step:0.01, onChange: v => { p.sub.volume=v; } });
   }
 
-  // ── Noise panel (OSC1 only) ───────────────────────────────
-  if (isOsc1) {
-    const noisePanel = createNoisePanel({ voice, color });
-    noisePanel.element.style.cssText = 'margin-top:6px;padding-top:6px;border-top:1px solid #1c1c3a';
-    body.appendChild(noisePanel.element);
-  }
+  // ── Noise panel (all voices) ─────────────────────────────
+  const noisePanel = createNoisePanel({ voice, color });
+  noisePanel.element.style.cssText = 'margin-top:6px;padding-top:6px;border-top:1px solid #1c1c3a';
+  body.appendChild(noisePanel.element);
 }

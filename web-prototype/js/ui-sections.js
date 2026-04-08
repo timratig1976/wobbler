@@ -27,23 +27,18 @@ function drawDistCurve(canvas, form, drive, color) {
 
   // Compute transfer function
   function distSample(x) {
-    if (drive < 0.001 && form !== 'soft') return x;
+    if (drive < 0.001) return x;
     const k = 1 + drive * 40;
     switch (form) {
-      case 'soft': return drive < 0.001 ? x : Math.tanh(x * k) / Math.tanh(k);
+      case 'tube': { const bias = 0.1*drive; const v = x+bias; return Math.tanh(v*k*0.7)/Math.tanh(k*0.7)-bias*0.5; }
+      case 'soft': return Math.tanh(x * k) / Math.tanh(k);
       case 'hard': return Math.max(-1, Math.min(1, x * k));
-      case 'fold': {
-        let v = x * (1 + drive * 8);
-        while (v > 1 || v < -1) v = v > 1 ? 2 - v : -2 - v;
-        return v;
-      }
-      case 'asym': return x >= 0
-        ? Math.tanh(x * k) / Math.tanh(k)
-        : Math.tanh(x * k * 0.4) / Math.tanh(k * 0.4) * 0.7;
-      case 'fuzz': {
-        const v = x * (1 + drive * 200);
-        return Math.sign(v) * Math.min(1, Math.abs(v) ** 0.2);
-      }
+      case 'fold': { let v = x*(1+drive*8); let i=0; while((v>1||v<-1)&&i++<20){v=v>1?2-v:-2-v;} return v; }
+      case 'asym': return x >= 0 ? Math.tanh(x*k)/Math.tanh(k) : Math.tanh(x*k*0.4)/Math.tanh(k*0.4)*0.7;
+      case 'fuzz': { const v = x*(1+drive*200); return Math.sign(v)*Math.min(1,Math.abs(v)**0.15); }
+      case 'rect': { const v = Math.max(0,x)*k; return Math.max(-1,Math.min(1,v))*2-0.5*drive; }
+      case 'downsample': { const step = Math.pow(2, Math.round(drive*6)); return Math.round(x*step)/step; }
+      case 'bitcrush':   { const bits = Math.max(1, Math.round(8*(1-drive))); const s = Math.pow(2,bits-1); return Math.round(x*s)/s; }
       default: return x;
     }
   }
@@ -83,14 +78,18 @@ function drawDistCurve(canvas, form, drive, color) {
 // Shared drawing body used by both functions above
 function _drawDistCurveBody(c, form, drive, color, W, H, dpr) {
   function distSample(x) {
-    if (drive < 0.001 && form !== 'soft') return x;
+    if (drive < 0.001) return x;
     const k = 1 + drive * 40;
     switch (form) {
-      case 'soft': return drive < 0.001 ? x : Math.tanh(x * k) / Math.tanh(k);
+      case 'tube': { const bias = 0.1*drive; const v = x+bias; return Math.tanh(v*k*0.7)/Math.tanh(k*0.7)-bias*0.5; }
+      case 'soft': return Math.tanh(x * k) / Math.tanh(k);
       case 'hard': return Math.max(-1, Math.min(1, x * k));
-      case 'fold': { let v = x * (1 + drive * 8); while (v > 1 || v < -1) v = v > 1 ? 2 - v : -2 - v; return v; }
-      case 'asym': return x >= 0 ? Math.tanh(x * k) / Math.tanh(k) : Math.tanh(x * k * 0.4) / Math.tanh(k * 0.4) * 0.7;
-      case 'fuzz': { const v = x * (1 + drive * 200); return Math.sign(v) * Math.min(1, Math.abs(v) ** 0.2); }
+      case 'fold': { let v = x*(1+drive*8); let i=0; while((v>1||v<-1)&&i++<20){v=v>1?2-v:-2-v;} return v; }
+      case 'asym': return x >= 0 ? Math.tanh(x*k)/Math.tanh(k) : Math.tanh(x*k*0.4)/Math.tanh(k*0.4)*0.7;
+      case 'fuzz': { const v = x*(1+drive*200); return Math.sign(v)*Math.min(1,Math.abs(v)**0.15); }
+      case 'rect': { const v = Math.max(0,x)*k; return Math.max(-1,Math.min(1,v))*2-0.5*drive; }
+      case 'downsample': { const step = Math.pow(2, Math.round(drive*6)); return Math.round(x*step)/step; }
+      case 'bitcrush':   { const bits = Math.max(1, Math.round(8*(1-drive))); const s = Math.pow(2,bits-1); return Math.round(x*s)/s; }
       default: return x;
     }
   }
@@ -210,44 +209,73 @@ function buildFXSection(container, fx, voice, color) {
 
 // ── Distortion Section ────────────────────────────────────
 function buildDistSection(container, dp, voice, color) {
-  const FORMS = ['soft','hard','fold','asym','fuzz'];
-  const FORM_LABELS = { soft:'SOFT', hard:'HARD', fold:'FOLD', asym:'ASYM', fuzz:'FUZZ' };
+  const FORMS       = ['tube','soft','hard','asym','fold','fuzz','rect','dnsmp','bits'];
+  const FORM_LABELS = { tube:'TUBE', soft:'SOFT', hard:'HARD', asym:'ASYM', fold:'FOLD', fuzz:'FUZZ', rect:'RECT', dnsmp:'DNSMP', bits:'BITS' };
+  const FORM_DSP    = { tube:'tube', soft:'soft', hard:'hard', asym:'asym', fold:'fold', fuzz:'fuzz', rect:'rect', dnsmp:'downsample', bits:'bitcrush' };
   const FORM_TIPS   = {
-    soft: 'Tanh saturation — smooth tube warmth',
-    hard: 'Hard clip — transistor crunch',
-    fold: 'Wavefolder — metallic, Buchla-style',
-    asym: 'Asymmetric clip — 2nd harmonic overdrive',
-    fuzz: 'Extreme fuzz — near-square saturation',
+    tube:  'Tube saturation — asymmetric tanh, warm 2nd/3rd harmonics',
+    soft:  'Soft clip — smooth tanh saturation',
+    hard:  'Hard clip — transistor crunch, square harmonics',
+    asym:  'Asymmetric — positive/negative clip at different ratios, 2nd harmonic',
+    fold:  'Wavefolder — metallic Buchla-style, reflects at ±1',
+    fuzz:  'Fuzz — extreme near-square saturation',
+    rect:  'Rectifier — half-wave, adds octave-up character',
+    dnsmp: 'Downsample — reduce sample rate, lo-fi aliasing sparkle',
+    bits:  'Bitcrush — reduce bit depth, digital grit',
   };
 
-  // ── Row 1: mode buttons (full width, same style as filter type row) ──
+  // Ensure dp has defaults for new fields
+  if (!dp.form || !FORMS.includes(dp.form)) dp.form = 'soft';
+  if (dp.tone === undefined) dp.tone = 18000;
+  if (dp.tonePost === undefined) dp.tonePost = false;
+
+  // ── Row 1: mode buttons + PRE/POST toggle ──
   const formRow = document.createElement('div');
-  formRow.style.cssText = 'display:flex;gap:3px;margin-bottom:5px;justify-content:flex-start';
+  formRow.style.cssText = 'display:flex;gap:3px;margin-bottom:5px;justify-content:flex-start;align-items:center;flex-wrap:wrap';
   container.appendChild(formRow);
 
   const formBtns = [];
   FORMS.forEach(f => {
     const b = document.createElement('button');
-    b.className = 'ftype-btn'; // NO active class — active CSS fills bg solid, use inline style only
+    b.className = 'ftype-btn';
     b.textContent = FORM_LABELS[f]; b.title = FORM_TIPS[f];
-    const isActive = f === dp.form;
-    b.style.cssText = `padding:3px 8px;font-size:10px;letter-spacing:1px;background:transparent;border-color:${isActive?color:'#2a2a44'};color:${isActive?color:'#555'}`;
+    const isActive = (FORM_DSP[f] === dp.form || f === dp.form);
+    b.style.cssText = `padding:3px 7px;font-size:10px;letter-spacing:1px;background:transparent;border-color:${isActive?color:'#2a2a44'};color:${isActive?color:'#555'}`;
     b.addEventListener('click', () => {
-      formBtns.forEach(x => { x.style.borderColor='#2a2a44'; x.style.color='#555'; x.style.background='transparent'; });
+      formBtns.forEach(x => { x.style.borderColor='#2a2a44'; x.style.color='#555'; });
       b.style.borderColor = color; b.style.color = color;
-      voice.set('dist', 'form', f);
+      const dspForm = FORM_DSP[f];
+      voice.set('dist', 'form', dspForm);
       redrawDist();
     });
     formBtns.push(b);
     formRow.appendChild(b);
   });
 
+  // PRE/POST tone filter toggle
+  const _postActive = () => voice.p.dist.tonePost === true;
+  const ppBtn = document.createElement('button');
+  ppBtn.style.cssText = `margin-left:auto;padding:3px 7px;font-size:9px;letter-spacing:1px;border:1px solid #2a2a44;background:transparent;color:#555;border-radius:3px;font-family:monospace;cursor:pointer;white-space:nowrap`;
+  const _updatePP = () => {
+    ppBtn.textContent = _postActive() ? 'POST' : 'PRE';
+    ppBtn.title = _postActive() ? 'Tone filter is POST-distortion — click for PRE' : 'Tone filter is PRE-distortion — click for POST';
+    ppBtn.style.borderColor = _postActive() ? color : '#2a2a44';
+    ppBtn.style.color       = _postActive() ? color : '#555';
+  };
+  _updatePP();
+  ppBtn.addEventListener('click', () => {
+    const next = !_postActive();
+    voice.p.dist.tonePost = next;
+    voice._distSetTonePost(next);
+    _updatePP();
+  });
+  formRow.appendChild(ppBtn);
+
   // ── Row 2: knobs (left, flex:1) + curve canvas (right, 50%) ──
   const inner = document.createElement('div');
   inner.style.cssText = 'display:flex;gap:6px;align-items:stretch';
   container.appendChild(inner);
 
-  // LEFT: knob row
   const left = document.createElement('div');
   left.style.cssText = 'flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;justify-content:center';
   inner.appendChild(left);
@@ -258,14 +286,16 @@ function buildDistSection(container, dp, voice, color) {
 
   [
     { key:'drive',  label:'DRIVE', min:0,   max:1,     value:dp.drive,  decimals:2 },
-    { key:'tone',   label:'TONE',  min:200, max:18000, value:dp.tone,   decimals:0, unit:'Hz', log:true },
+    { key:'tone',   label:'TONE',  min:200, max:18000, value:dp.tone ?? 18000, decimals:0, log:true },
     { key:'mix',    label:'MIX',   min:0,   max:1,     value:dp.mix,    decimals:2 },
     { key:'volume', label:'VOL',   min:0,   max:2,     value:dp.volume, decimals:2 },
   ].forEach(cfg => {
-    makeKnob({ parent:kr, color, size:46, ...cfg, onChange: v => {
+    const k = makeKnob({ parent:kr, color, size:46, ...cfg, onChange: v => {
       voice.set('dist', cfg.key, v);
       if (cfg.key === 'drive' || cfg.key === 'mix') redrawDist();
     }});
+    if (cfg.key === 'drive') voice._driveKnob   = k;
+    if (cfg.key === 'mix')   voice._distMixKnob = k;
   });
 
   // RIGHT: canvas fixed 50%
@@ -277,21 +307,16 @@ function buildDistSection(container, dp, voice, color) {
   distCvs.style.cssText = 'display:block;width:100%;height:90px;background:#06060f;border-radius:4px;border:1px solid #1a1a30;cursor:default';
   right.appendChild(distCvs);
 
-  // Single draw function — curve + waveform in one pass
   const _draw = () => {
     const dpr = window.devicePixelRatio || 1;
     const W = distCvs.offsetWidth || 120;
     const H = 90;
-    // Always set backing store size (browser skips the clear if unchanged)
     distCvs.width  = W * dpr;
     distCvs.height = H * dpr;
-    // Always read from voice.p.dist directly — never stale
     const _dist = voice.p.dist;
-    // Per-mode minimum preview drive — each formula saturates at different rates
-    const _PREVIEW = { soft:0.12, hard:0.06, fold:0.30, asym:0.08, fuzz:0.004 };
+    const _PREVIEW = { tube:0.10, soft:0.12, hard:0.06, fold:0.30, asym:0.08, fuzz:0.004, rect:0.10, downsample:0.5, bitcrush:0.5 };
     const _previewDrive = Math.max(_dist.drive, _PREVIEW[_dist.form] ?? 0.12);
     _drawDistCurveOnCtx(distCvs, _dist.form, _previewDrive, color, W, H, dpr);
-    // Overlay live waveform on top if analysers exist
     if (voice.preAnalyser && voice.analyser) {
       _overlayDistWaveform(distCvs, voice.preAnalyser, voice.analyser, _dist.mix, color, W, H, dpr);
     }
@@ -299,20 +324,16 @@ function buildDistSection(container, dp, voice, color) {
 
   const redrawDist = () => requestAnimationFrame(_draw);
 
-  // Continuously animate while note held
   let _animId = null;
   const _startAnim = () => { if (_animId) return; const loop = () => { _draw(); _animId = requestAnimationFrame(loop); }; _animId = requestAnimationFrame(loop); };
   const _stopAnim  = () => { if (_animId) { cancelAnimationFrame(_animId); _animId = null; } redrawDist(); };
 
-  // Hook into voice noteOn/noteOff
   const _origNoteOn  = voice.noteOn.bind(voice);
   const _origNoteOff = voice.noteOff.bind(voice);
   voice.noteOn  = (...a) => { _origNoteOn(...a);  _startAnim(); };
   voice.noteOff = (...a) => { _origNoteOff(...a); setTimeout(_stopAnim, 400); };
 
-  // Initial draw — wait for layout so offsetWidth is non-zero
   setTimeout(redrawDist, 150);
-  // Also redraw whenever the container resizes (e.g. panel collapse/expand)
   if (typeof ResizeObserver !== 'undefined') {
     new ResizeObserver(() => redrawDist()).observe(distCvs);
   }
@@ -322,7 +343,7 @@ function buildDistSection(container, dp, voice, color) {
             voice._distWet.gain.setTargetAtTime(0,       voice.ctx.currentTime, 0.01);
             voice._distDry.gain.setTargetAtTime(1,       voice.ctx.currentTime, 0.01); },
     () => { voice.p.dist.bypassed = false;
-            voice._distWet.gain.setTargetAtTime(dp.mix,     voice.ctx.currentTime, 0.01);
+            voice._distWet.gain.setTargetAtTime(dp.mix,   voice.ctx.currentTime, 0.01);
             voice._distDry.gain.setTargetAtTime(1-dp.mix, voice.ctx.currentTime, 0.01); },
     !voice.p.dist.bypassed
   );
@@ -883,6 +904,513 @@ function createLFOPanel({ parent, lfoIndex, lfoParams, color, voice, bpmGet }) {
   }
 
   return { element: row, body };
+}
+
+// ─────────────────────────────────────────────────────────
+//  buildOneLFOColumn — one LFO column for the 2-up layout
+//  container : DOM node to append into
+//  initSlot  : initial slot index (0–4)
+//  engine    : LFOEngine instance
+//  color     : voice accent color
+//  voice     : WobblerVoice
+// ─────────────────────────────────────────────────────────
+function buildOneLFOColumn(container, initSlot, engine, color, voice) {
+  let activeSlot = initSlot;
+  function getSlot() { return engine?.slots[activeSlot]; }
+
+  const col = document.createElement('div');
+  col.style.cssText = 'flex:1;min-width:0;display:flex;flex-direction:column;gap:4px;padding:4px;border-radius:6px;border:1px solid #1a1a30;background:#05050e';
+  container.appendChild(col);
+
+  // ── Slot tabs row (compact 1–5) ──────────────────────
+  const tabRow = document.createElement('div');
+  tabRow.style.cssText = 'display:flex;gap:2px;align-items:center';
+  col.appendChild(tabRow);
+
+  const slotLbl = document.createElement('span');
+  slotLbl.style.cssText = 'font-size:9px;color:#444;letter-spacing:1px;margin-right:2px;flex-shrink:0';
+  slotLbl.textContent = 'SLOT';
+  tabRow.appendChild(slotLbl);
+
+  const slotBtns = [];
+  for (let i = 0; i < 5; i++) {
+    const b = document.createElement('button');
+    b.textContent = i + 1;
+    const active = i === activeSlot;
+    b.style.cssText = `padding:2px 6px;font-size:10px;font-family:monospace;border-radius:3px;cursor:pointer;border:1px solid ${active ? color : '#2a2a44'};background:${active ? color+'22' : 'transparent'};color:${active ? color : '#555'};transition:all 0.1s`;
+    b.addEventListener('click', () => {
+      activeSlot = i;
+      slotBtns.forEach((x, j) => {
+        x.style.borderColor = j === i ? color : '#2a2a44';
+        x.style.background  = j === i ? color + '22' : 'transparent';
+        x.style.color       = j === i ? color : '#555';
+      });
+      refreshUI();
+    });
+    slotBtns.push(b);
+    tabRow.appendChild(b);
+  }
+
+  // Active slot label (e.g. "LFO 1 — CUTOFF")
+  const slotStatusLbl = document.createElement('span');
+  slotStatusLbl.style.cssText = 'margin-left:auto;font-size:9px;letter-spacing:1px;color:#555;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:80px';
+  tabRow.appendChild(slotStatusLbl);
+
+  // ── Canvas area ───────────────────────────────────────
+  const canvasWrap = document.createElement('div');
+  canvasWrap.style.cssText = 'position:relative;flex-shrink:0';
+  col.appendChild(canvasWrap);
+
+  const bpCvs = document.createElement('canvas');
+  bpCvs.style.cssText = 'display:block;width:100%;height:110px;border-radius:4px;background:#050510;border:1px solid #1e1e3a;cursor:crosshair;touch-action:none';
+  canvasWrap.appendChild(bpCvs);
+
+  // Axis labels
+  const axTop = document.createElement('div'); axTop.style.cssText = 'position:absolute;top:3px;left:4px;font-size:9px;color:#333;pointer-events:none'; axTop.textContent = '1.0';
+  const axBot = document.createElement('div'); axBot.style.cssText = 'position:absolute;bottom:3px;left:4px;font-size:9px;color:#333;pointer-events:none'; axBot.textContent = '0.0';
+  canvasWrap.append(axTop, axBot);
+
+  // Playhead canvas
+  const phCvs = document.createElement('canvas');
+  phCvs.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;border-radius:4px';
+  canvasWrap.appendChild(phCvs);
+
+  // ── Draw curve ─────────────────────────────────────────
+  function drawCurve() {
+    const slot = getSlot(); if (!slot) return;
+    const dpr = window.devicePixelRatio || 1;
+    const W = bpCvs.offsetWidth || 200, H = bpCvs.offsetHeight || 110;
+    bpCvs.width = W * dpr; bpCvs.height = H * dpr;
+    const c = bpCvs.getContext('2d'); c.scale(dpr, dpr);
+    c.fillStyle = '#050510'; c.fillRect(0, 0, W, H);
+    c.strokeStyle = 'rgba(255,255,255,0.05)'; c.lineWidth = 0.5;
+    [0.25,0.5,0.75].forEach(v => {
+      c.beginPath(); c.moveTo(0, v*H); c.lineTo(W, v*H); c.stroke();
+      c.beginPath(); c.moveTo(v*W, 0); c.lineTo(v*W, H); c.stroke();
+    });
+    const pts = slot.points; if (!pts || !pts.length) return;
+    const N = pts.length;
+    c.beginPath();
+    for (let i = 0; i < N; i++) {
+      const x = (i / (N-1)) * W, y = (1 - pts[i]) * H;
+      i === 0 ? c.moveTo(x, y) : c.lineTo(x, y);
+    }
+    c.save(); c.globalAlpha = 0.15; c.strokeStyle = color; c.lineWidth = 6; c.stroke(); c.restore();
+    c.strokeStyle = color; c.lineWidth = 2; c.stroke();
+    slot.breakpoints.forEach(bp => {
+      const x = bp.x * W, y = (1 - bp.y) * H;
+      c.beginPath(); c.arc(x, y, 4, 0, Math.PI*2);
+      c.fillStyle = bp.hard ? '#ff6644' : color; c.fill();
+      c.strokeStyle = '#0a0a1a'; c.lineWidth = 1.5; c.stroke();
+    });
+  }
+
+  // ── Playhead animation ─────────────────────────────────
+  (function animPh() {
+    requestAnimationFrame(animPh);
+    const slot = getSlot(); if (!slot) return;
+    const dpr = window.devicePixelRatio || 1;
+    const W = phCvs.offsetWidth || 200, H = phCvs.offsetHeight || 110;
+    if (phCvs.width !== W*dpr || phCvs.height !== H*dpr) { phCvs.width = W*dpr; phCvs.height = H*dpr; }
+    const c = phCvs.getContext('2d');
+    c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    c.clearRect(0, 0, W, H);
+    if (!slot.enabled || slot.target === 'none') return;
+    const scaledPhase = (slot.phase * slot.mult) % 1;
+    const px = scaledPhase * W;
+    c.save();
+    c.strokeStyle = 'rgba(255,255,255,0.5)'; c.lineWidth = 1.5; c.setLineDash([3,3]);
+    c.beginPath(); c.moveTo(px, 0); c.lineTo(px, H); c.stroke(); c.setLineDash([]);
+    if (slot.points && slot.points.length) {
+      const idx = Math.min(slot.points.length-1, Math.max(0, Math.floor(scaledPhase * slot.points.length)));
+      const val = slot.points[idx];
+      const dy = (1 - val) * H;
+      c.shadowColor = color; c.shadowBlur = 8;
+      c.fillStyle = '#fff'; c.beginPath(); c.arc(px, dy, 3, 0, Math.PI*2); c.fill();
+      c.shadowBlur = 0;
+      c.fillStyle = 'rgba(255,255,255,0.7)'; c.font = 'bold 8px monospace';
+      c.fillText(val.toFixed(2), Math.min(W-24, Math.max(2, px+4)), Math.max(9, dy-4));
+    }
+    c.restore();
+  })();
+
+  // ── Breakpoint interaction ─────────────────────────────
+  let dragIdx = -1;
+  const BP_HIT = 10;
+  function bpXY(e) {
+    const r = bpCvs.getBoundingClientRect();
+    const cx = e.touches ? e.touches[0].clientX : e.clientX;
+    const cy = e.touches ? e.touches[0].clientY : e.clientY;
+    return { x: (cx - r.left) / r.width, y: 1 - (cy - r.top) / r.height };
+  }
+  function bpHit(px, py) {
+    const s = getSlot(); if (!s) return -1;
+    const W = bpCvs.offsetWidth || 200, H = bpCvs.offsetHeight || 110;
+    for (let i = 0; i < s.breakpoints.length; i++) {
+      const bp = s.breakpoints[i];
+      if (Math.hypot((bp.x - px)*W, (bp.y - py)*H) < BP_HIT) return i;
+    }
+    return -1;
+  }
+  bpCvs.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    const { x, y } = bpXY(e);
+    const idx = bpHit(x, y);
+    if (idx >= 0) { dragIdx = idx; bpCvs.setPointerCapture(e.pointerId); return; }
+    const s = getSlot(); if (!s) return;
+    s.breakpoints.push({ x: Math.max(0,Math.min(1,x)), y: Math.max(0,Math.min(1,y)), hard: false, tension: 0 });
+    s.breakpoints.sort((a,b) => a.x - b.x);
+    engine.setSlotBreakpoints(activeSlot, s.breakpoints);
+    drawCurve();
+  });
+  bpCvs.addEventListener('pointermove', e => {
+    if (dragIdx < 0) return; e.preventDefault();
+    const { x, y } = bpXY(e);
+    const s = getSlot(); if (!s) return;
+    const bp = s.breakpoints[dragIdx];
+    bp.y = Math.max(0, Math.min(1, y));
+    if (dragIdx > 0 && dragIdx < s.breakpoints.length-1) bp.x = Math.max(0.01, Math.min(0.99, x));
+    engine.setSlotBreakpoints(activeSlot, s.breakpoints);
+    drawCurve();
+  });
+  bpCvs.addEventListener('pointerup', () => { dragIdx = -1; });
+  bpCvs.addEventListener('dblclick', e => {
+    const { x, y } = bpXY(e);
+    const idx = bpHit(x, y);
+    const s = getSlot(); if (!s) return;
+    if (idx > 0 && idx < s.breakpoints.length-1) {
+      s.breakpoints.splice(idx, 1);
+    } else if (idx >= 0) {
+      s.breakpoints[idx].hard = !s.breakpoints[idx].hard;
+    }
+    engine.setSlotBreakpoints(activeSlot, s.breakpoints);
+    drawCurve();
+  });
+
+  // ── Target groups ──────────────────────────────────────
+  const TARGET_GROUPS = [
+    { label:'FILTER', color:'#a78bfa', targets:[['cutoff','CUT'],['resonance','RES']] },
+    { label:'OSC',    color:'#34d399', targets:[['pitch','PCH'],['semi','SEM'],['fine','FIN']] },
+    { label:'AMP',    color:'#fb923c', targets:[['amp','TREM'],['drive','DRV'],['distMix','MIX']] },
+    { label:'NOISE',  color:'#22d3ee', targets:[['noiseAmt','LVL']] },
+  ];
+
+  const tgtWrap = document.createElement('div');
+  tgtWrap.style.cssText = 'display:flex;flex-direction:column;gap:3px';
+  col.appendChild(tgtWrap);
+
+  const tgtTopRow = document.createElement('div');
+  tgtTopRow.style.cssText = 'display:flex;align-items:center;gap:4px';
+  tgtWrap.appendChild(tgtTopRow);
+
+  const tgtLbl = document.createElement('span');
+  tgtLbl.style.cssText = 'font-size:9px;color:#444;letter-spacing:1px;flex-shrink:0';
+  tgtLbl.textContent = 'TARGET';
+  tgtTopRow.appendChild(tgtLbl);
+
+  const offBtn = document.createElement('button');
+  offBtn.style.cssText = 'padding:2px 7px;font-size:9px;font-family:monospace;border:1px solid #ff4466;color:#ff4466;background:transparent;border-radius:2px;cursor:pointer';
+  offBtn.textContent = 'OFF'; offBtn.dataset.tgt = 'none';
+  tgtTopRow.appendChild(offBtn);
+
+  const tgtBtnRow = document.createElement('div');
+  tgtBtnRow.style.cssText = 'display:flex;gap:3px;flex-wrap:wrap';
+  tgtWrap.appendChild(tgtBtnRow);
+
+  const tgtBtns = [offBtn];
+  TARGET_GROUPS.forEach(({ label: gl, color: gc, targets }) => {
+    const grp = document.createElement('div');
+    grp.style.cssText = `display:flex;flex-direction:column;gap:2px;padding:3px 4px;border-radius:4px;border:1px solid ${gc}22;background:${gc}08`;
+    const glbl = document.createElement('div');
+    glbl.style.cssText = `font-size:8px;letter-spacing:1px;color:${gc};opacity:0.7;text-align:center`;
+    glbl.textContent = gl;
+    grp.appendChild(glbl);
+    const brow = document.createElement('div'); brow.style.cssText = 'display:flex;gap:2px';
+    targets.forEach(([val, lbl]) => {
+      const b = document.createElement('button');
+      b.style.cssText = `padding:2px 5px;font-size:9px;font-family:monospace;border:1px solid ${gc}66;color:${gc}aa;background:transparent;border-radius:2px;cursor:pointer`;
+      b.textContent = lbl; b.dataset.tgt = val; b.dataset.gc = gc;
+      brow.appendChild(b); tgtBtns.push(b);
+    });
+    grp.appendChild(brow); tgtBtnRow.appendChild(grp);
+  });
+
+  function _syncTgtBtns(target) {
+    tgtBtns.forEach(b => {
+      const gc = b.dataset.gc;
+      const on = b.dataset.tgt === target;
+      b.style.color       = on ? (gc || '#ff4466') : (gc ? `${gc}aa` : '#ff4466');
+      b.style.borderColor = on ? (gc || '#ff4466') : (gc ? `${gc}66` : '#ff446688');
+      b.style.background  = on ? (gc ? `${gc}22` : '#ff446622') : 'transparent';
+    });
+    slotStatusLbl.textContent = target === 'none' ? '—' : target.toUpperCase();
+  }
+
+  tgtBtns.forEach(b => {
+    b.addEventListener('click', () => {
+      const val = b.dataset.tgt;
+      const s = getSlot(); if (!s) return;
+      const prev = s.target;
+      s.target = val; s.enabled = (val !== 'none');
+      _syncTgtBtns(val);
+      if (val === 'none') {
+        const t = voice.ctx.currentTime;
+        if (prev === 'cutoff')    { voice._lfoOwnsFilterCutoff = false; voice._filterSetCutoff(voice.p.filter.cutoff, t, 0.02); }
+        if (prev === 'resonance') voice._filterSetResonance(voice.p.filter.resonance, t, 0.02);
+        if (['pitch','amp','tremolo','semi','fine'].includes(prev)) {
+          voice._tremoloGain?.gain.setTargetAtTime(1, t, 0.02);
+          (voice._activeOscs||[]).forEach(o => { try { o.detune.setTargetAtTime(0, t, 0.02); } catch(_) {} });
+        }
+        if (prev === 'drive')    voice.set('dist','drive', voice.p.dist.drive);
+        if (prev === 'distMix')  voice.set('dist','mix', voice.p.dist.mix);
+        if (prev === 'noiseAmt') voice._noiseG?.gain.setTargetAtTime(voice.p.noise.volume, t, 0.02);
+      }
+      if (s.enabled && engine && !engine.playing) engine.start();
+    });
+  });
+
+  // ── Bars + Mult in one compact block ──────────────────
+  const timingWrap = document.createElement('div');
+  timingWrap.style.cssText = 'display:flex;flex-direction:column;gap:2px';
+  col.appendChild(timingWrap);
+
+  const barsBtns = [];
+  (() => {
+    const row = document.createElement('div'); row.style.cssText = 'display:flex;gap:2px;align-items:center';
+    const lbl = document.createElement('span'); lbl.style.cssText = 'font-size:9px;color:#444;letter-spacing:1px;min-width:28px;flex-shrink:0'; lbl.textContent = 'BARS';
+    row.appendChild(lbl);
+    [1,2,4,8,16].forEach(n => {
+      const b = document.createElement('button');
+      b.style.cssText = 'padding:2px 6px;font-size:9px;font-family:monospace;border:1px solid #2a2a44;color:#555;background:transparent;border-radius:2px;cursor:pointer';
+      b.textContent = n; b.dataset.bars = n;
+      b.addEventListener('click', () => { const s=getSlot();if(s){s.bars=n;barsBtns.forEach(x=>{x.style.borderColor='#2a2a44';x.style.color='#555';x.style.background='transparent';});b.style.borderColor=color;b.style.color=color;b.style.background=color+'22';} });
+      barsBtns.push(b); row.appendChild(b);
+    });
+    timingWrap.appendChild(row);
+  })();
+
+  const allMultBtns = [];
+  const MULT_ROWS = [
+    { label:'ST',  lc:'#aaa',    values:[[1,'×1'],[2,'×2'],[4,'×4'],[8,'×8'],[16,'×16']] },
+    { label:'3T',  lc:'#a855f7', values:[[1.5,'×1T'],[3,'×2T'],[6,'×4T'],[12,'×8T']] },
+    { label:'DOT', lc:'#22d3ee', values:[[0.667,'×1D'],[1.333,'×2D'],[2.667,'×4D']] },
+  ];
+  MULT_ROWS.forEach(({ label, lc, values }) => {
+    const row = document.createElement('div'); row.style.cssText = 'display:flex;gap:2px;align-items:center';
+    const lbl = document.createElement('span'); lbl.style.cssText = `font-size:9px;color:${lc};min-width:28px;flex-shrink:0`; lbl.textContent = label;
+    row.appendChild(lbl);
+    values.forEach(([val, disp]) => {
+      const b = document.createElement('button');
+      b.style.cssText = `padding:2px 5px;font-size:9px;font-family:monospace;border:1px solid ${lc}55;color:${lc}88;background:transparent;border-radius:2px;cursor:pointer`;
+      b.textContent = disp; b.dataset.mult = val;
+      b.addEventListener('click', () => {
+        const s=getSlot();if(!s)return; s.mult=val;
+        allMultBtns.forEach(x=>{x.style.borderColor=x.dataset.lc+'55';x.style.color=x.dataset.lc+'88';x.style.background='transparent';});
+        b.style.borderColor=lc; b.style.color=lc; b.style.background=lc+'22';
+      });
+      b.dataset.lc = lc;
+      allMultBtns.push(b); row.appendChild(b);
+    });
+    timingWrap.appendChild(row);
+  });
+
+  // ── Depth knob + CLR ──────────────────────────────────
+  const depthRow = document.createElement('div');
+  depthRow.style.cssText = 'display:flex;gap:6px;align-items:flex-end';
+  col.appendChild(depthRow);
+
+  const depthWrap = document.createElement('div'); depthWrap.className = 'lfo-knob-wrap';
+  const depthKnob = makeKnob({ parent: depthWrap, min:0, max:1, value: engine?.slots[activeSlot]?.depth ?? 0.6, label:'DEPTH', decimals:2, color,
+    onChange: v => { const s = getSlot(); if (s) s.depth = v; }
+  });
+  depthRow.appendChild(depthWrap);
+
+  const clrBtn = document.createElement('button');
+  clrBtn.style.cssText = 'padding:3px 8px;font-size:9px;font-family:monospace;border:1px solid #ff4466;color:#ff4466;background:transparent;border-radius:2px;cursor:pointer;align-self:center';
+  clrBtn.textContent = 'CLR';
+  clrBtn.addEventListener('click', () => {
+    const s = getSlot(); if (!s) return;
+    s.breakpoints = [{x:0,y:0.5,hard:false},{x:1,y:0.5,hard:false}];
+    engine.setSlotBreakpoints(activeSlot, s.breakpoints);
+    drawCurve();
+  });
+  depthRow.appendChild(clrBtn);
+
+  // ── Presets — collapsed by default, toggle button ─────
+  const presetToggleBtn = document.createElement('button');
+  presetToggleBtn.style.cssText = `padding:2px 6px;font-size:9px;font-family:monospace;border:1px solid #2a2a44;color:#555;background:transparent;border-radius:2px;cursor:pointer;width:100%;text-align:left`;
+  presetToggleBtn.textContent = '▶ PRESETS';
+  col.appendChild(presetToggleBtn);
+
+  const presetWrap = document.createElement('div');
+  presetWrap.style.cssText = 'display:none;flex-direction:column;gap:2px';
+  col.appendChild(presetWrap);
+
+  presetToggleBtn.addEventListener('click', () => {
+    const open = presetWrap.style.display !== 'none';
+    presetWrap.style.display = open ? 'none' : 'flex';
+    presetToggleBtn.textContent = (open ? '▶' : '▼') + ' PRESETS';
+  });
+
+  function makePresetRowCol(label, lc, presets) {
+    const row = document.createElement('div'); row.style.cssText = 'display:flex;gap:2px;flex-wrap:wrap;align-items:center';
+    const lbl = document.createElement('span'); lbl.style.cssText = `font-size:8px;color:${lc};letter-spacing:1px;min-width:36px;flex-shrink:0`; lbl.textContent = label;
+    row.appendChild(lbl);
+    presets.forEach(([name, display]) => {
+      const b = document.createElement('button');
+      b.style.cssText = `padding:2px 5px;font-size:9px;font-family:monospace;border:1px solid ${lc}55;color:${lc}aa;background:transparent;border-radius:2px;cursor:pointer`;
+      b.textContent = display;
+      b.addEventListener('click', () => {
+        if (typeof loadLFOPreset === 'function' && loadLFOPreset(activeSlot, name, engine)) {
+          engine.slots[activeSlot].presetName = name;
+          drawCurve();
+          refreshUI();
+        }
+      });
+      row.appendChild(b);
+    });
+    return row;
+  }
+
+  [
+    ['SHAPE','#aaa',   [['sawup','SAW↗'],['sawdn','SAW↘'],['sine','SIN'],['square','SQ'],['triangle','TRI'],['bounce','BNC'],['shark','SHRK'],['expup','EXP↑'],['expdown','EXP↓']]],
+    ['STEPS','#666',   [['step4','4ST'],['step8','8ST'],['stair4','4↑'],['stair4dn','4↓'],['stairirr','IRR']]],
+    ['DnB',  '#00ffb2',[['dnbsaw','SAW'],['dnbpump','PMP'],['wubwub','WUB'],['acid','ACD'],['fastsaw','FST'],['triplet','TRP'],['rubber','RBR']]],
+    ['NEURO','#a855f7',[['neurozap','ZAP'],['neuroglitch','GLT'],['neuro','NEU'],['neurostep','STP']]],
+    ['LIQ',  '#22d3ee',[['liquid','LIQ'],['breathe','BRE'],['flow','FLW'],['halftime','HLF'],['swell','SWL'],['vowel','VOW'],['wah','WAH']]],
+    ['AGGRO','#ff4444',[['hardsaw','HSW'],['spike','SPK'],['crusher','CRS'],['razorsaw','RZR'],['glitchstep','GLT'],['sawblast','BLS']]],
+    ['BUILD','#fbbf24',[['rise4','RIS'],['riseexp4','EXP'],['risesaw4','SAW'],['buildpump','PMP'],['risedrop','DRP'],['swell4','SWL'],['stab4','STB']]],
+  ].forEach(([lbl, lc, presets]) => presetWrap.appendChild(makePresetRowCol(lbl, lc, presets)));
+
+  // ── MY CURVES — user-saved breakpoint library ─────────
+  const MY_CURVES_KEY = 'wobbler_lfo_curves';
+
+  function _loadCurveLib() {
+    try { return JSON.parse(localStorage.getItem(MY_CURVES_KEY) || '{}'); } catch(_) { return {}; }
+  }
+  function _saveCurveLib(lib) {
+    try { localStorage.setItem(MY_CURVES_KEY, JSON.stringify(lib)); } catch(_) {}
+  }
+
+  // Divider
+  const myCurvesDivider = document.createElement('div');
+  myCurvesDivider.style.cssText = 'border-top:1px solid #1a1a30;margin:4px 0 2px';
+  presetWrap.appendChild(myCurvesDivider);
+
+  // Header row: "MY CURVES" label
+  const myCurvesHdr = document.createElement('div');
+  myCurvesHdr.style.cssText = 'font-size:8px;letter-spacing:1px;color:#6366f1;margin-bottom:3px';
+  myCurvesHdr.textContent = 'MY CURVES';
+  presetWrap.appendChild(myCurvesHdr);
+
+  // Save row: text input + SAVE button
+  const saveRow = document.createElement('div');
+  saveRow.style.cssText = 'display:flex;gap:3px;align-items:center';
+  presetWrap.appendChild(saveRow);
+
+  const nameInput = document.createElement('input');
+  nameInput.type = 'text';
+  nameInput.placeholder = 'curve name…';
+  nameInput.style.cssText = 'flex:1;min-width:0;padding:2px 4px;font-size:9px;font-family:monospace;background:#0a0a18;border:1px solid #2a2a44;color:#aaa;border-radius:2px;outline:none';
+  saveRow.appendChild(nameInput);
+
+  const saveBtn = document.createElement('button');
+  saveBtn.textContent = 'SAVE';
+  saveBtn.style.cssText = 'padding:2px 6px;font-size:9px;font-family:monospace;border:1px solid #6366f1;color:#6366f1;background:transparent;border-radius:2px;cursor:pointer;flex-shrink:0';
+  saveRow.appendChild(saveBtn);
+
+  // List container for saved curves
+  const curveList = document.createElement('div');
+  curveList.style.cssText = 'display:flex;flex-direction:column;gap:2px;max-height:80px;overflow-y:auto';
+  presetWrap.appendChild(curveList);
+
+  function renderCurveList() {
+    curveList.innerHTML = '';
+    const lib = _loadCurveLib();
+    const names = Object.keys(lib);
+    if (!names.length) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'font-size:8px;color:#333;font-family:monospace;padding:2px';
+      empty.textContent = 'no saved curves yet';
+      curveList.appendChild(empty);
+      return;
+    }
+    names.forEach(name => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:2px;align-items:center';
+
+      const loadBtn = document.createElement('button');
+      loadBtn.textContent = name;
+      loadBtn.title = 'Load "' + name + '"';
+      loadBtn.style.cssText = 'flex:1;min-width:0;text-align:left;padding:2px 5px;font-size:9px;font-family:monospace;border:1px solid #6366f155;color:#6366f1aa;background:transparent;border-radius:2px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+      loadBtn.addEventListener('click', () => {
+        const lib2 = _loadCurveLib();
+        const bps = lib2[name];
+        if (!bps) return;
+        const s = getSlot(); if (!s) return;
+        s.breakpoints = JSON.parse(JSON.stringify(bps));
+        s.presetName = 'custom';
+        engine.setSlotBreakpoints(activeSlot, s.breakpoints);
+        drawCurve();
+      });
+      row.appendChild(loadBtn);
+
+      const delBtn = document.createElement('button');
+      delBtn.textContent = '✕';
+      delBtn.title = 'Delete "' + name + '"';
+      delBtn.style.cssText = 'padding:2px 5px;font-size:9px;font-family:monospace;border:1px solid #ff446655;color:#ff4466aa;background:transparent;border-radius:2px;cursor:pointer;flex-shrink:0';
+      delBtn.addEventListener('click', () => {
+        const lib2 = _loadCurveLib();
+        delete lib2[name];
+        _saveCurveLib(lib2);
+        renderCurveList();
+      });
+      row.appendChild(delBtn);
+
+      curveList.appendChild(row);
+    });
+  }
+
+  saveBtn.addEventListener('click', () => {
+    const name = nameInput.value.trim();
+    if (!name) { nameInput.focus(); return; }
+    const s = getSlot(); if (!s) return;
+    const lib = _loadCurveLib();
+    lib[name] = JSON.parse(JSON.stringify(s.breakpoints));
+    _saveCurveLib(lib);
+    nameInput.value = '';
+    renderCurveList();
+  });
+
+  // Save on Enter key in input
+  nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') saveBtn.click(); });
+
+  renderCurveList();
+
+  // ── refreshUI — sync all controls to activeSlot ───────
+  function refreshUI() {
+    const s = getSlot(); if (!s) return;
+    _syncTgtBtns(s.target);
+    barsBtns.forEach(b => {
+      const on = parseInt(b.dataset.bars) === s.bars;
+      b.style.borderColor = on ? color : '#2a2a44';
+      b.style.color       = on ? color : '#555';
+      b.style.background  = on ? color+'22' : 'transparent';
+    });
+    allMultBtns.forEach(b => {
+      const on = parseFloat(b.dataset.mult) === s.mult;
+      const lc = b.dataset.lc;
+      b.style.borderColor = on ? lc : lc+'55';
+      b.style.color       = on ? lc : lc+'88';
+      b.style.background  = on ? lc+'22' : 'transparent';
+    });
+    depthKnob.setValue(s.depth);
+    slotStatusLbl.textContent = s.target === 'none' ? '—' : s.target.toUpperCase();
+    drawCurve();
+  }
+
+  setTimeout(() => refreshUI(), 60);
+  return { refreshUI, drawCurve };
 }
 
 // ─────────────────────────────────────────────────────────

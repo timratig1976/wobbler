@@ -27,6 +27,7 @@ function synthToJSON(synth, seq) {
     fx:        { ...v.p.fx     },
     noise:     { ...v.p.noise  },
     lfos: v.lfoEngine ? v.lfoEngine.toJSON() : [],
+    globalLfos: synth.lfoEngine ? synth.lfoEngine.toJSON() : [],
     sequencer: {
       patterns: (seq?.voices || []).map(vSeq =>
         (vSeq.steps || []).map(s => ({ active: s.active, note: s.note, accent: s.accent }))
@@ -102,11 +103,16 @@ function applyPresetToSynth(preset, synth, seq) {
       if (preset.noise.filterMix !== undefined) voice.set('noise', 'filterMix', preset.noise.filterMix);
     }
 
-    // LFO engine
+    // Per-voice LFO engine
     if (preset.lfos && voice.lfoEngine) {
       voice.lfoEngine.fromJSON(preset.lfos);
     }
   });
+
+  // Global LFO engine
+  if (preset.globalLfos && synth.lfoEngine) {
+    synth.lfoEngine.fromJSON(preset.globalLfos);
+  }
 
   // Sequencer
   if (preset.sequencer?.patterns && seq) {

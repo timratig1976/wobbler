@@ -128,8 +128,11 @@ function makeKnob({ parent, min, max, value, label, unit='', decimals=1, step=0,
     return parseFloat(s.toFixed(decimals)) + unit;
   }
   let modNorm = null; // null = no modulation display
+  // Serum-style mod range: { lo: 0..1, hi: 0..1, color, onchange }
+  let modRange = null;
+
   function draw() {
-    const sc = S / 68; // scale factor relative to default 68px
+    const sc = S / 68;
     const n = toNorm(val), CX=S/2, CY=S/2, R=24*sc;
     const a0 = 0.75*Math.PI, sweep = 1.5*Math.PI, a1 = a0 + n*sweep;
     c.clearRect(0,0,S,S);
@@ -139,6 +142,34 @@ function makeKnob({ parent, min, max, value, label, unit='', decimals=1, step=0,
     c.beginPath(); c.arc(CX,CY,6*sc,0,Math.PI*2); c.fillStyle='#12122a'; c.fill();
     const ix=CX+(R-8*sc)*Math.cos(a1), iy=CY+(R-8*sc)*Math.sin(a1);
     c.beginPath(); c.arc(ix,iy,3.5*sc,0,Math.PI*2); c.fillStyle='#fff'; c.fill();
+    // ── Serum-style mod range arc ─────────────────────────────
+    if (modRange) {
+      const Rr = R + 7*sc;
+      const lo = Math.max(0, Math.min(1, modRange.lo));
+      const hi = Math.max(0, Math.min(1, modRange.hi));
+      const aLo = a0 + lo * sweep, aHi = a0 + hi * sweep;
+      c.save();
+      // dim track
+      c.beginPath(); c.arc(CX,CY,Rr,a0,a0+sweep);
+      c.strokeStyle='rgba(255,255,255,0.06)'; c.lineWidth=3*sc; c.lineCap='round'; c.stroke();
+      // colored range band
+      if (Math.abs(hi - lo) > 0.005) {
+        c.beginPath(); c.arc(CX,CY,Rr, Math.min(aLo,aHi), Math.max(aLo,aHi));
+        c.strokeStyle = modRange.color || '#ff9900';
+        c.lineWidth = 3*sc; c.globalAlpha = 0.85; c.stroke();
+      }
+      c.globalAlpha = 1;
+      // endpoint handles
+      [[lo,'#fff'],[hi, modRange.color||'#ff9900']].forEach(([norm, col]) => {
+        const a = a0 + norm * sweep;
+        const hx = CX + Rr*Math.cos(a), hy = CY + Rr*Math.sin(a);
+        c.shadowColor = col; c.shadowBlur = 4;
+        c.beginPath(); c.arc(hx,hy,2.8*sc,0,Math.PI*2);
+        c.fillStyle = col; c.fill();
+      });
+      c.shadowBlur = 0;
+      c.restore();
+    }
     // Modulation ring — outer dot showing live modulated position
     if (modNorm !== null) {
       const Rm = R + 5*sc, nm = Math.max(0, Math.min(1, modNorm));
@@ -156,7 +187,27 @@ function makeKnob({ parent, min, max, value, label, unit='', decimals=1, step=0,
   }
 
   let sy, sv;
+  // Detect which mod range handle (if any) is near pointer angle
+  function _rangeHandleAt(e) {
+    if (!modRange) return null;
+    const sc = S / 68, CX=S/2, CY=S/2, R=24*sc, Rr=R+7*sc;
+    const rect = canvas.getBoundingClientRect();
+    const px = (e.clientX - rect.left) * (S / rect.width);
+    const py = (e.clientY - rect.top)  * (S / rect.height);
+    const a0=0.75*Math.PI, sweep=1.5*Math.PI;
+    for (const [which, norm] of [['lo', modRange.lo], ['hi', modRange.hi]]) {
+      const a = a0 + norm * sweep;
+      const hx = CX + Rr*Math.cos(a), hy = CY + Rr*Math.sin(a);
+      if (Math.hypot(px-hx, py-hy) < 7*sc) return which;
+    }
+    return null;
+  }
+
   canvas.style.cursor = 'ns-resize';
+  canvas.addEventListener('pointermove', e => {
+    if (!modRange) return;
+    canvas.style.cursor = _rangeHandleAt(e) ? 'ew-resize' : 'ns-resize';
+  });
   canvas.addEventListener('pointerdown', e => {
     // Ctrl+Click (Cmd+Click on Mac) to reset to default
     if (e.ctrlKey || e.metaKey) {
@@ -164,6 +215,30 @@ function makeKnob({ parent, min, max, value, label, unit='', decimals=1, step=0,
       val = defVal;
       draw();
       onChange?.(val);
+      return;
+    }
+    // Alt+drag on range handle — drag lo or hi endpoint
+    const handle = _rangeHandleAt(e);
+    if (handle && modRange) {
+      e.preventDefault(); e.stopPropagation();
+      canvas.setPointerCapture(e.pointerId);
+      const a0=0.75*Math.PI, sweep=1.5*Math.PI;
+      const onMove = ev => {
+        const rect = canvas.getBoundingClientRect();
+        const px = (ev.clientX - rect.left) * (S / rect.width) - S/2;
+        const py = (ev.clientY - rect.top)  * (S / rect.height) - S/2;
+        let a = Math.atan2(py, px);
+        // Normalise angle into knob sweep
+        let norm = (a - a0) / sweep;
+        // Handle wrap-around at bottom gap
+        if (norm < -0.15) norm += (2*Math.PI/sweep);
+        norm = Math.max(0, Math.min(1, norm));
+        modRange[handle] = norm;
+        modRange.onChange?.(modRange.lo, modRange.hi);
+        draw();
+      };
+      const onUp = () => { canvas.removeEventListener('pointermove',onMove); canvas.removeEventListener('pointerup',onUp); };
+      canvas.addEventListener('pointermove', onMove); canvas.addEventListener('pointerup', onUp);
       return;
     }
     e.preventDefault(); sy=e.clientY; sv=val; canvas.setPointerCapture(e.pointerId);
@@ -186,6 +261,12 @@ function makeKnob({ parent, min, max, value, label, unit='', decimals=1, step=0,
     setValue(v)       { val=Math.max(min,Math.min(max,v)); draw(); },
     setModValue(v)    { modNorm = v === null ? null : toNorm(Math.max(min,Math.min(max,v))); draw(); },
     clearModValue()   { modNorm = null; draw(); },
+    // Serum-style mod range: lo/hi are normalized 0..1, onChange(lo,hi) fires on drag
+    setModRange(lo, hi, rangeColor, onChange) {
+      modRange = { lo: Math.max(0,Math.min(1,lo)), hi: Math.max(0,Math.min(1,hi)), color: rangeColor, onChange };
+      draw();
+    },
+    clearModRange()   { modRange = null; draw(); },
   };
 }
 
@@ -233,7 +314,8 @@ function _computeFilterResponse(type, fc, Q, sr, W) {
 
 function drawFilterCurve(canvas, filterNode, color, envAmount = 0, modCutoff = null,
                           postAnalyser = null, preAnalyser = null,
-                          lfoState = null) {
+                          lfoState = null,
+                          baseCutoff = null, baseResonance = null, baseType = null) {
   const dpr = window.devicePixelRatio || 1;
   const W = canvas.offsetWidth || 260, H = canvas.offsetHeight || 90;
   if (!W || !H) return;
@@ -243,7 +325,7 @@ function drawFilterCurve(canvas, filterNode, color, envAmount = 0, modCutoff = n
   const c = canvas.getContext('2d');
   c.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  const sr = filterNode.context.sampleRate;
+  const sr = (filterNode && filterNode.context) ? filterNode.context.sampleRate : 44100;
   const FMIN = 20, FMAX = 20000;
   const DB_TOP = 24, DB_BOT = -72;
   const freqToX = f => Math.log10(Math.max(FMIN, f) / FMIN) / Math.log10(FMAX/FMIN) * W;
@@ -309,10 +391,10 @@ function drawFilterCurve(canvas, filterNode, color, envAmount = 0, modCutoff = n
     c.stroke(); c.restore();
   }
 
-  // ── Layer 3: Bode plot — compute current cutoff ──────
-  const fc   = filterNode.frequency.value;
-  const Q    = filterNode.Q.value;
-  const type = filterNode.type;
+  // ── Layer 3: Bode plot — always use JS param state, never AudioNode properties ──
+  const fc   = baseCutoff    ?? 800;
+  const Q    = baseResonance ?? 5;
+  const type = baseType      ?? 'lowpass';
 
   // LFO-modulated cutoff
   let liveFc = fc;

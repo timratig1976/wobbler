@@ -20,7 +20,7 @@ select { font-family: inherit; font-size: 14px; cursor: pointer; }
 input  { font-family: inherit; }
 
 /* ── Layout ───────────────────────────────────────────── */
-#app { display: flex; flex-direction: column; min-height: 100vh; }
+#app { display: flex; flex-direction: column; min-height: 100vh; padding: 0 10px; }
 
 /* HEADER */
 #header {
@@ -497,140 +497,7 @@ input  { font-family: inherit; }
 .patch-del:hover { border-color: #ff4444; color: #ff4444; }
 .patch-sep { width: 1px; height: 18px; background: #1e1e40; flex-shrink: 0; }
 
-/* TWE — Temporal Wobble Engine */
-.twe-sec { display: flex; flex-direction: column; gap: 6px; }
-.twe-preset-bar {
-  display: flex; align-items: center; gap: 3px; flex-wrap: wrap;
-  padding: 4px 6px; margin-bottom: 4px;
-  background: #07071c; border: 1px solid #1a1a38; border-radius: 3px;
-}
-.twe-preset-btn {
-  padding: 3px 8px; border: 1px solid #1e1e40; border-radius: 2px;
-  background: #0c0c26; color: #888; font-size: 8px; letter-spacing: 0.5px;
-  white-space: nowrap; flex-shrink: 0; cursor: pointer; transition: all 0.1s;
-}
-.twe-preset-btn:hover { border-color: #66ffb2; color: #66ffb2; }
-.twe-preset-random { border-color: #ff8844; color: #ff8844; }
-.twe-preset-random:hover { background: #ff8844; color: #050510; }
-.twe-preset-ai { border-color: #a855f7; color: #a855f7; }
-.twe-preset-ai:hover { background: #a855f7; color: #050510; }
-.twe-preset-sep { width: 1px; height: 16px; background: #1e1e40; flex-shrink: 0; margin: 0 2px; }
-.twe-preview {
-  display: block; width: 100%; height: 70px;
-  border-radius: 3px; background: #030308;
-  border: 1px solid #111120; margin-bottom: 2px;
-}
-.twe-pat-bar {
-  display: flex; align-items: center; gap: 4px; flex-wrap: nowrap;
-  padding: 4px 0; margin-bottom: 2px;
-}
-.twe-pat-sel { min-width: 100px; max-width: 130px; }
-.twe-header { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; margin-bottom: 2px; }
-.twe-ratemod-btn {
-  padding: 3px 8px; border: 1px solid #1e1e40; border-radius: 3px;
-  background: #0c0c26; color: #555; font-size: 8px; letter-spacing: 0.5px;
-  white-space: nowrap; flex-shrink: 0; cursor: pointer;
-}
-.twe-ratemod-btn.active { background: #66ffb2; color: #050510; border-color: #66ffb2; font-weight: bold; }
-.twe-slot {
-  display: flex; align-items: center; flex-wrap: nowrap; gap: 6px;
-  background: #08081a; border: 1px solid #12122a; border-radius: 3px; padding: 4px 6px;
-}
-.twe-lane-toggle {
-  padding: 1px 4px; border: 1px solid #333355; border-radius: 2px; flex-shrink: 0;
-  background: transparent; color: #555; font-size: 7px; letter-spacing: 1px;
-  cursor: pointer; transition: all 0.15s; margin-left: auto;
-}
-.twe-lane-toggle.active { border-color: var(--accent); color: var(--accent); }
-.twe-lane-toggle:not(.active) { border-color: #ff4466; color: #ff4466; }
-.twe-selected { background: rgba(255,255,255,0.02) !important; }
-.twe-slot-label {
-  font-size: 10px; letter-spacing: 1px; color: #66ffb2; opacity: 0.7;
-  text-transform: uppercase; min-width: 40px; flex-shrink: 0;
-}
-.twe-target-sel {
-  background: #0c0c26; color: #999; border: 1px solid #1e1e40; border-radius: 2px;
-  font-size: 12px; padding: 4px 5px; flex-shrink: 0; max-width: 96px; cursor: pointer;
-}
-.twe-shape-row { display: flex; gap: 2px; flex-shrink: 0; }
 .dist-form-row  { display: flex; gap: 3px; flex-wrap: wrap; margin-bottom: 6px; }
-.twe-shape-row .wave-btn { padding: 4px 9px; font-size: 12px; }
-.twe-sync-row { display: flex; align-items: center; gap: 3px; flex-shrink: 0; }
-.twe-sync-btn {
-  padding: 4px 10px; border: 1px solid #1e1e40; border-radius: 2px;
-  background: #0c0c26; color: #555; font-size: 12px; letter-spacing: 0.5px;
-  white-space: nowrap; flex-shrink: 0; cursor: pointer;
-}
-.twe-sync-btn.active { background: #66ffb2; color: #050510; border-color: #66ffb2; font-weight: bold; }
-.twe-div-sel {
-  background: #0c0c26; color: #999; border: 1px solid #1e1e40; border-radius: 2px;
-  font-size: 10px; padding: 3px 4px; max-width: 52px; flex-shrink: 0; cursor: pointer;
-}
-.twe-mod-btn {
-  padding: 4px 10px; border: 1px solid #1e1e40; border-radius: 2px;
-  background: #0c0c26; color: #555; font-size: 12px; font-weight: bold;
-  flex-shrink: 0; cursor: pointer;
-}
-.twe-mod-btn.active { background: #ff8844; color: #050510; border-color: #ff8844; }
-
-/* TWE Redesign — nested main + aux lanes */
-.twe-lanes { display: flex; flex-direction: column; gap: 5px; }
-.twe-main-block, .twe-aux-block {
-  background: #07071c; border: 1px solid #1a1a38; border-radius: 4px; overflow: hidden;
-}
-.twe-block-hdr {
-  display: flex; align-items: center; gap: 6px; padding: 5px 7px;
-  background: #0a0a20; border-bottom: 1px solid #151530; flex-wrap: nowrap;
-}
-.twe-block-lbl { font-size: 8px; letter-spacing: 1px; text-transform: uppercase; opacity: 0.85; flex: 1; }
-.twe-expand-btn {
-  padding: 2px 7px; border: 1px solid #1e1e40; border-radius: 2px;
-  background: #0c0c26; color: #555; font-size: 7.5px; cursor: pointer; white-space: nowrap;
-}
-.twe-expand-btn:hover { color: #aaa; border-color: #2a2a50; }
-.twe-remove-btn {
-  padding: 1px 5px; border: 1px solid #3a1a1a; border-radius: 2px;
-  background: #1a0a0a; color: #664444; font-size: 9px; cursor: pointer;
-}
-.twe-remove-btn:hover { background: #ff3333; color: #fff; border-color: #ff3333; }
-.twe-core-controls { padding: 5px 7px; display: flex; flex-direction: column; gap: 4px; }
-.twe-ctrl-row { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
-.twe-sub-components { display: flex; flex-direction: column; gap: 0; border-top: 1px solid #111128; }
-.twe-sub-block { border-bottom: 1px solid #0e0e22; }
-.twe-sub-block:last-child { border-bottom: none; }
-.twe-sub-hdr {
-  display: flex; align-items: center; gap: 5px; padding: 4px 10px;
-  background: #090918; cursor: default;
-}
-.twe-sub-lbl { font-size: 7.5px; letter-spacing: 0.8px; color: #888; text-transform: uppercase; flex: 1; }
-.twe-sub-controls { padding: 4px 10px 5px; display: flex; flex-direction: column; gap: 3px; }
-.twe-aux-controls { padding: 5px 7px; display: flex; flex-direction: column; gap: 4px; }
-.twe-add-aux-btn {
-  padding: 5px; border: 1px dashed #1e1e40; border-radius: 3px;
-  background: transparent; color: #444; font-size: 8px; letter-spacing: 0.5px;
-  cursor: pointer; transition: all 0.15s; text-align: center;
-}
-.twe-add-aux-btn:hover { border-color: #4455aa; color: #8899cc; }
-/* Draw curve canvas */
-.twe-draw-wrap { padding: 5px 7px; border-top: 1px solid #111128; background: #050510; }
-.twe-draw-canvas { display: block; width: 100%; height: 72px; border-radius: 2px; cursor: crosshair; border: 1px solid #1a1a38; }
-.twe-draw-btns { display: flex; gap: 5px; margin-top: 4px; }
-.twe-draw-presets { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
-.twe-draw-preset-btn { padding: 2px 5px; font-size: 8px; background: #0c0c26; border: 1px solid #1e1e40; color: #888; border-radius: 2px; cursor: pointer; white-space: nowrap; }
-.twe-draw-preset-btn:hover { background: #1a1a3a; color: #bbb; border-color: #3a3a60; }
-.twe-draw-ai-row { display: flex; gap: 4px; margin-top: 4px; }
-.twe-draw-ai-input { flex: 1; background: #08081c; border: 1px solid #2a2a50; color: #ccc; font-size: 9px; padding: 3px 6px; border-radius: 2px; outline: none; }
-.twe-draw-ai-input:focus { border-color: #6644aa; }
-.twe-draw-ai-btn { padding: 3px 8px; background: #1a0a2a; border: 1px solid #6644aa; color: #cc88ff; font-size: 8px; border-radius: 2px; cursor: pointer; white-space: nowrap; }
-.twe-draw-ai-btn:hover { background: #2a1a3a; color: #ee99ff; }
-.twe-draw-apply { padding: 3px 10px; background: #1a3a1a; border: 1px solid #2a5a2a; color: #66ff66; font-size: 8px; border-radius: 2px; cursor: pointer; }
-.twe-draw-apply:hover { background: #2a5a2a; }
-.twe-draw-reset { padding: 3px 8px; background: #2a1010; border: 1px solid #5a2a2a; color: #ff8888; font-size: 8px; border-radius: 2px; cursor: pointer; }
-.twe-draw-reset:hover { background: #3a1818; border-color: #ff4444; }
-.twe-draw-close  { padding: 3px 8px; background: #1a1a2a; border: 1px solid #2a2a40; color: #666; font-size: 9px; border-radius: 2px; cursor: pointer; }
-.twe-draw-close:hover { color: #ff6666; border-color: #ff6666; }
-.twe-shape-row .twe-draw-btn { border-color: #6644aa; color: #9966dd; }
-.twe-shape-row .twe-draw-btn.active { background: #6644aa; color: #fff; border-color: #9966dd; }
 
 /* OSC — filter-style 2-column layout */
 .osc-cols {
@@ -683,38 +550,21 @@ input  { font-family: inherit; }
 }
 .noise-left .knob-row { justify-content: flex-start; margin: 0; }
 
-/* Piano keyboard */
-#piano-section {
-  background: #0a0a1a; border-top: 1px solid #1a1a35;
-  padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 8px;
-  flex-shrink: 0;
+#rec-btn {
+  background: #0e0e24; border: 1px solid #2a2a44; color: #ff4466;
+  padding: 4px 12px; font-size: 10px; letter-spacing: 1px; font-family: monospace;
+  border-radius: 3px; cursor: pointer; transition: all 0.15s;
 }
-.piano-toolbar {
-  display: flex; align-items: center; gap: 10px;
-  font-size: 9px; letter-spacing: 1px; color: #555;
+#rec-btn:hover { border-color: #ff4466; background: #1a0a14; }
+#rec-btn.recording {
+  color: #fff; background: #ff2244; border-color: #ff2244;
+  animation: rec-pulse 1s ease-in-out infinite;
 }
-.piano-hint { font-size: 8px; color: #333; letter-spacing: 0.5px; }
-.piano-wrap {
-  position: relative; display: flex; user-select: none;
-  touch-action: none;
+@keyframes rec-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.6; }
 }
-.piano-white {
-  position: relative; width: 36px; height: 90px; flex-shrink: 0;
-  background: #e8e8f8; border: 1px solid #888; border-radius: 0 0 4px 4px;
-  cursor: pointer; transition: background 0.04s;
-  display: flex; align-items: flex-end; justify-content: center; padding-bottom: 5px;
-}
-.piano-white.active { background: #00ffb2; border-color: #00ccaa; }
-.piano-white .piano-key-lbl {
-  font-size: 7px; color: #888; pointer-events: none; letter-spacing: 0px;
-}
-.piano-white.active .piano-key-lbl { color: #050510; }
-.piano-black {
-  position: absolute; width: 22px; height: 55px; z-index: 2;
-  background: #1a1a2e; border: 1px solid #000; border-radius: 0 0 3px 3px;
-  cursor: pointer; transition: background 0.04s;
-}
-.piano-black.active { background: #007a55; border-color: #00ffb2; }
+
 </style>
 </head>
 <body>
@@ -725,26 +575,37 @@ input  { font-family: inherit; }
     <h1>WOBBLER <span>BASS</span></h1>
     <div id="midi-status">NO MIDI</div>
     <button id="play-btn">▶ PLAY</button>
+    <button id="rec-btn">⏺ REC</button>
     <div class="bpm-ctrl">
       <label>BPM</label>
       <button id="bpm-down" class="bpm-btn">−</button>
-      <input id="bpm-input" type="number" value="120" min="40" max="240">
+      <input id="bpm-input" type="number" value="174" min="40" max="240">
       <button id="bpm-up" class="bpm-btn">+</button>
     </div>
   </header>
 
-  <!-- AI PROMPT BAR -->
-  <div id="ai-bar" style="display:flex;gap:8px;align-items:center;padding:6px 16px;background:#0a0a1a;border-bottom:1px solid #1a1a30;flex-shrink:0">
-    <span style="font-size:9px;letter-spacing:1px;color:#6644aa;white-space:nowrap">AI SOUND</span>
-    <input id="ai-prompt" type="text" placeholder="Describe your sound... e.g. dark neurofunk bass with triplet wobble"
-      style="flex:1;background:#10101e;border:1px solid #2a2a44;color:#ccc;padding:5px 10px;font-family:monospace;font-size:10px;border-radius:3px;outline:none">
-    <input id="ai-api-key" type="password" placeholder="Claude API key"
-      style="width:160px;background:#10101e;border:1px solid #2a2a44;color:#888;padding:5px 8px;font-family:monospace;font-size:9px;border-radius:3px;outline:none">
-    <button id="ai-generate-btn" style="padding:5px 14px;background:#1a0a2a;border:1px solid #6644aa;color:#cc88ff;font-family:monospace;font-size:10px;cursor:pointer;border-radius:3px;white-space:nowrap">
-      GENERATE
-    </button>
-    <span id="ai-status" style="font-size:9px;color:#555;min-width:80px"></span>
+  <!-- PATCH + AI ROW (50/50 split below header) -->
+  <div id="top-controls-row" style="display:flex;width:100%;border-bottom:1px solid #1a1a30;flex-shrink:0">
+    <!-- LEFT: Patch Load Area (50%) -->
+    <div id="patch-bar-mount" style="flex:0 0 50%;max-width:50%;padding:6px 12px;background:#07070f;border-right:1px solid #1a1a30;display:flex;align-items:center;gap:8px">
+      <!-- Populated by buildPatchBar in main.js -->
+    </div>
+    <!-- RIGHT: AI Prompt Bar (50%) -->
+    <div id="ai-bar" style="flex:0 0 50%;max-width:50%;display:flex;gap:8px;align-items:center;padding:6px 16px;background:#0a0a1a">
+      <span style="font-size:9px;letter-spacing:1px;color:#6644aa;white-space:nowrap">AI SOUND</span>
+      <input id="ai-prompt" type="text" placeholder="Describe your sound... e.g. dark neurofunk bass with triplet wobble"
+        style="flex:1;background:#10101e;border:1px solid #2a2a44;color:#ccc;padding:5px 10px;font-family:monospace;font-size:10px;border-radius:3px;outline:none">
+      <input id="ai-api-key" type="password" placeholder="Claude API key"
+        style="width:140px;background:#10101e;border:1px solid #2a2a44;color:#888;padding:5px 8px;font-family:monospace;font-size:9px;border-radius:3px;outline:none">
+      <button id="ai-generate-btn" style="padding:5px 14px;background:#1a0a2a;border:1px solid #6644aa;color:#cc88ff;font-family:monospace;font-size:10px;cursor:pointer;border-radius:3px;white-space:nowrap">
+        GENERATE
+      </button>
+      <span id="ai-status" style="font-size:9px;color:#555;min-width:60px"></span>
+    </div>
   </div>
+
+  <!-- DRUM LOOP PLAYER -->
+  <div id="drum-player-mount"></div>
 
   <!-- 3 VOICE COLUMNS (top, full width) -->
   <div id="voices">
@@ -761,19 +622,16 @@ input  { font-family: inherit; }
     <div class="sec-hdr">MASTER</div>
   </section>
 
-  <!-- PIANO KEYBOARD -->
-  <div id="piano-section"></div>
-
 </div>
 <script src="js/constants.js"></script>
 <script src="js/lfo-presets.js"></script>
 <script src="js/lfo-engine.js"></script>
+<script src="js/factory-presets.js"></script>
 <script src="js/osc-engine.js"></script>
 <script src="js/analyzer.js"></script>
 <script src="js/dsp.js"></script>
 <script src="js/ui-widgets.js"></script>
 <script src="js/ui-sections.js"></script>
-<script src="js/twe-data.js"></script>
 <script src="js/storage.js"></script>
 <script src="js/ui-osc.js"></script>
 <script src="js/ui-voice.js"></script>
@@ -781,7 +639,7 @@ input  { font-family: inherit; }
 <script src="js/midi.js"></script>
 <script src="js/presets.js"></script>
 <script src="js/ai-interface.js"></script>
+<script src="js/drum-player.js"></script>
 <script src="js/main.js"></script>
-<script src="piano.js"></script>
 </body>
 </html>

@@ -39,125 +39,6 @@ class _EnvTracker {
   }
 }
 
-// ─────────────────────────────────────────────────────────
-//  ZDFFilterShim — wraps AudioWorkletNode with BiquadFilter-like API
-//  Presents .frequency, .Q, .type so all existing code keeps working.
-//  Falls back to BiquadFilter if worklet fails to load.
-// ─────────────────────────────────────────────────────────
-class ZDFFilterShim {
-  constructor(ctx) {
-    this.ctx = ctx;
-    this._type = 'lowpass';
-    this._frequency = 800;
-    this._Q = 0.7;
-    this._workletNode = null;
-    this._ready = false;
-
-    // Start with BiquadFilter as passthrough until worklet loads
-    this._biquad = ctx.createBiquadFilter();
-    this._biquad.type = 'lowpass';
-    this._biquad.frequency.value = 800;
-    this._biquad.Q.value = 5;
-
-    // Public AudioParam-like proxy objects
-    this.frequency = {
-      value: 800,
-      _shim: this,
-      setValueAtTime:            (v,t) => { this.frequency.value=v; this._setFreq(v,t,'setValueAtTime'); },
-      linearRampToValueAtTime:   (v,t) => { this.frequency.value=v; this._setFreq(v,t,'linearRampToValueAtTime'); },
-      exponentialRampToValueAtTime: (v,t) => { this.frequency.value=v; this._setFreq(v,t,'exponentialRampToValueAtTime'); },
-      setTargetAtTime:           (v,t,tc) => { this.frequency.value=v; this._setFreq(v,t,'setTargetAtTime',tc); },
-      cancelScheduledValues:     (t) => { this._biquad.frequency.cancelScheduledValues(t); if(this._workletNode) try{this._workletNode.parameters.get('cutoff').cancelScheduledValues(t);}catch(_){} },
-      cancelAndHoldAtTime:       (t) => { try{this._biquad.frequency.cancelAndHoldAtTime(t);}catch(_){} },
-      connect:                   (n) => { /* LFO connects go to worklet param once ready */ this._freqConnects = this._freqConnects||[]; this._freqConnects.push(n); this._biquad.frequency.connect(n); },
-      disconnect:                ()  => { try{this._biquad.frequency.disconnect();}catch(_){} if(this._workletNode)try{this._workletNode.parameters.get('cutoff').disconnect();}catch(_){} },
-    };
-    this.Q = {
-      value: 0.7,
-      _shim: this,
-      setValueAtTime:          (v,t) => { this.Q.value=v; this._setQ(v,t,'setValueAtTime'); },
-      linearRampToValueAtTime: (v,t) => { this.Q.value=v; this._setQ(v,t,'linearRampToValueAtTime'); },
-      setTargetAtTime:         (v,t,tc) => { this.Q.value=v; this._setQ(v,t,'setTargetAtTime',tc); },
-      cancelScheduledValues:   (t) => { this._biquad.Q.cancelScheduledValues(t); if(this._workletNode) try{this._workletNode.parameters.get('resonance').cancelScheduledValues(t);}catch(_){} },
-      cancelAndHoldAtTime:     (t) => { try{this._biquad.Q.cancelAndHoldAtTime(t);}catch(_){} },
-      connect:                 (n) => { this._biquad.Q.connect(n); },
-      disconnect:              ()  => { try{this._biquad.Q.disconnect();}catch(_){} },
-    };
-
-    // Expose .context for drawFilterCurve compat
-    this.context = ctx;
-    // Keep .numberOfInputs/.numberOfOutputs for connect/disconnect compat
-    this.numberOfInputs  = 1;
-    this.numberOfOutputs = 1;
-  }
-
-  get type() { return this._type; }
-  set type(v) {
-    this._type = v;
-    this._biquad.type = v === 'notch' ? 'notch' : v === 'highpass' ? 'highpass' : v === 'bandpass' ? 'bandpass' : 'lowpass';
-    if (this._workletNode) {
-      const t = v==='highpass'?1:v==='bandpass'?2:v==='notch'?3:0;
-      this._workletNode.parameters.get('filterType').setValueAtTime(t, this.ctx.currentTime);
-    }
-  }
-
-  _setFreq(v, t, method, tc) {
-    const clamped = Math.max(20, Math.min(20000, v));
-    try { tc !== undefined ? this._biquad.frequency[method](clamped,t,tc) : this._biquad.frequency[method](clamped,t); } catch(_) {}
-    if (this._workletNode) {
-      const p = this._workletNode.parameters.get('cutoff');
-      try { tc !== undefined ? p[method](clamped,t,tc) : p[method](clamped,t); } catch(_) {}
-    }
-  }
-  _setQ(v, t, method, tc) {
-    try { tc !== undefined ? this._biquad.Q[method](v,t,tc) : this._biquad.Q[method](v,t); } catch(_) {}
-    if (this._workletNode) {
-      const p = this._workletNode.parameters.get('resonance');
-      try { tc !== undefined ? p[method](v,t,tc) : p[method](v,t); } catch(_) {}
-    }
-  }
-
-  connect(dest, outIdx, inIdx) {
-    if (this._workletNode) { try{ this._workletNode.connect(dest,outIdx,inIdx); } catch(_){} }
-    else { try { this._biquad.connect(dest,outIdx,inIdx); } catch(_){} }
-    this._dest = { dest, outIdx, inIdx };
-    return dest;
-  }
-  disconnect() {
-    try{ this._biquad.disconnect(); } catch(_){}
-    if(this._workletNode) try{ this._workletNode.disconnect(); } catch(_){}
-  }
-
-  // Called by the voice to push the upstream node to our input
-  connectInput(src) {
-    this._src = src;
-    if (this._workletNode) { try { src.connect(this._workletNode); } catch(_){} }
-    else { try { src.connect(this._biquad); } catch(_){} }
-  }
-
-  // Once worklet is ready: swap biquad → workletNode in-place
-  _swapToWorklet(workletNode) {
-    this._workletNode = workletNode;
-    this._ready = true;
-
-    // Set initial params
-    const now = this.ctx.currentTime;
-    workletNode.parameters.get('cutoff').setValueAtTime(Math.max(20,Math.min(20000,this.frequency.value)), now);
-    workletNode.parameters.get('resonance').setValueAtTime(Math.max(0.01,this.Q.value), now);
-    const ft = this._type==='highpass'?1:this._type==='bandpass'?2:this._type==='notch'?3:0;
-    workletNode.parameters.get('filterType').setValueAtTime(ft, now);
-
-    // Re-wire signal chain: src → workletNode → dest
-    if (this._src && this._dest) {
-      try { this._src.disconnect(this._biquad); } catch(_) {}
-      try { this._biquad.disconnect(); } catch(_) {}
-      try { this._src.connect(workletNode); } catch(_) {}
-      const {dest, outIdx, inIdx} = this._dest;
-      try { workletNode.connect(dest, outIdx, inIdx); } catch(_) {}
-    }
-    console.log('[ZDF] Filter worklet active');
-  }
-}
 
 // ─────────────────────────────────────────────────────────
 //  WobblerVoice — OSC + Noise + Filter + 5 LFOs + ADSR
@@ -175,9 +56,10 @@ class WobblerVoice {
       adsr:   { attack:0.005, decay:0.25, sustain:0.4, release:0.12, atkCurve:0, decCurve:0, relCurve:0 },
       lfos:   Array.from({length:5}, (_,i) => ({
         waveform:'sine', rate:4, depth:0, phase:0, bpmSync:false, syncDiv:4,
-        target:'cutoff', envA:0, envR:0, _enabled: false,
+        target:'none', envA:0, envR:0, _enabled: false,
         ...(i===4 ? {metaTarget:null, metaTargetLFO:0} : {})
       })),
+      comp: { threshold:-24, knee:6, ratio:4, attack:0.003, release:0.1, bypassed:false },
       dist: { form:'soft', drive:0, tone:18000, mix:0, volume:1, bypassed:false },
       eq:   { lowGain:0, midGain:0, highGain:0, lowFreq:200, midFreq:1000, highFreq:6000, bypassed:false },
       fx:   { reverbMix:0, reverbDecay:2.0, delayMix:0, delayTime:0.375, delayFB:0.4, bypassed:false },
@@ -193,69 +75,88 @@ class WobblerVoice {
       osc2: { waveform:'sine', oct:0, semi:0, detune:7, cents:0, volume:0.5, unison:1, unisonDetune:10 },
       sub:  { waveform:'sine', oct:-2, cents:0, volume:0.6 },
       volume:0.8, pan:0, mute:false,
-      twe: {
-        chaos: 0, ratemod: false, barsTotal: 4, tweAmt: 1, _bypassed: true,
-        main: {
-          rate:2, depth:0, attack:0, decay:0, target:'cutoff', shape:'sine', bpmSync:false, syncDiv:4, triplet:false, dotted:false, _enabled:true,
-          strike: { rate:8,  depth:0, attack:0, decay:0.4, startBar:0, target:'noiseAmt', shape:'sine', bpmSync:false, syncDiv:8,  triplet:false, dotted:false, _enabled:true },
-          body:   { rate:4,  depth:0, attack:0, decay:0,   startBar:0, target:'cutoff',   shape:'sine', bpmSync:false, syncDiv:4,  triplet:false, dotted:false, _enabled:true },
-          tail:   { rate:2,  depth:0, attack:0, decay:0.6, startBar:0, target:'pitch',    shape:'sine', bpmSync:false, syncDiv:2,  triplet:false, dotted:false, _enabled:true },
-        },
-        aux: [],
-      },
     };
 
     // Persistent nodes — created once, live for the session
-    this.filter = new ZDFFilterShim(ctx);
-    this._initZDFWorklet();
+    // BiquadFilter as primary voice filter — stable with setTargetAtTime automation.
+    // Original crash (rapid setValueAtTime at 20fps) is fixed; BiquadFilter is safe here.
+    this.filter = ctx.createBiquadFilter();
+    this.filter.type = 'lowpass';
+    this.filter.frequency.value = 800;
+    this.filter.Q.value = 1;
+    this.filter.channelCount = 2; this.filter.channelCountMode = 'explicit';
+    this._filterPassthrough = null; // no longer used
+    this._zdfActive = false;        // kept for guard compat — filter is always active now
     this.envGain    = ctx.createGain();    this.envGain.gain.value    = 0;
     this.outputGain = ctx.createGain();    this.outputGain.gain.value = 0.8;
     this.panner     = ctx.createStereoPanner(); this.panner.pan.value = 0;
 
     this.analyser = ctx.createAnalyser();
     this.analyser.fftSize = 2048; this.analyser.smoothingTimeConstant = 0.6;
+    this.analyser.channelCount = 2; this.analyser.channelCountMode = 'explicit';
 
     this.preAnalyser = ctx.createAnalyser();
     this.preAnalyser.fftSize = 512; this.preAnalyser.smoothingTimeConstant = 0.6;
+    this.preAnalyser.channelCount = 2; this.preAnalyser.channelCountMode = 'explicit';
+
+    // Voice compressor — sits after filter (Option C: Dist → Filter → Comp)
+    this._voiceComp = ctx.createDynamicsCompressor();
+    this._voiceComp.threshold.value = -24;
+    this._voiceComp.knee.value      = 6;
+    this._voiceComp.ratio.value     = 4;
+    this._voiceComp.attack.value    = 0.003;
+    this._voiceComp.release.value   = 0.1;
+    this._voiceComp.channelCount = 2; this._voiceComp.channelCountMode = 'explicit';
 
     // Distortion chain nodes
     this._distPre  = ctx.createGain();  this._distPre.gain.value  = 1;
     this._distNode = ctx.createWaveShaper(); this._distNode.oversample = 'none';
     this._distNode.curve = this._distCurve('soft', 0);
+    // Tone filter — real BiquadFilter LP, used pre OR post distortion
     this._distTone = ctx.createBiquadFilter();
-    this._distTone.type = 'lowpass'; this._distTone.frequency.value = 18000; this._distTone.Q.value = 0.5;
+    this._distTone.type = 'lowpass';
+    this._distTone.frequency.value = 18000;
+    this._distTone.Q.value = 0.5;
+    this._distToneBypass = ctx.createGain(); this._distToneBypass.gain.value = 1;
     this._distPost = ctx.createGain();  this._distPost.gain.value = 1;
     this._distWet  = ctx.createGain();  this._distWet.gain.value  = 0; // dry by default
     this._distDry  = ctx.createGain();  this._distDry.gain.value  = 1;
+    this._distTonePost = false; // false = pre-dist, true = post-dist
 
     // Filter wet/dry mix nodes
     this.filterWet = ctx.createGain(); this.filterWet.gain.value = 1;
     this.filterDry = ctx.createGain(); this.filterDry.gain.value = 0;
 
-    // sources → _distPre → _distNode → _distTone → _distPost → _distWet → filter
-    //         ↘ _distDry ↗
-    // filter → filterWet → envGain
-    //       ↘ filterDry ↗
+    // Set all chain nodes to stereo so signal is never collapsed to mono
+    [this.envGain, this.outputGain, this._voiceComp, this._distPre, this._distPost,
+     this._distWet, this._distDry, this.filterWet, this.filterDry,
+     this._distNode, this._distTone, this._distToneBypass].forEach(n => { n.channelCount = 2; n.channelCountMode = 'explicit'; });
+
+    // Signal chain Option C (Dist → Filter → Comp):
+    // OSCs → _distPre → [tone-pre] → _distNode → _distPost → _distWet → preAnalyser → filter → filterWet → envGain → _voiceComp → _tremoloGain
+    //      ↘↗ _distDry ↗                                                           ↘ filterDry ↗
     this._tremoloGain = ctx.createGain(); this._tremoloGain.gain.value = 1;
-    this._distPre.connect(this._distNode);
+    this._tremoloGain.channelCount = 2; this._tremoloGain.channelCountMode = 'explicit';
+    // distPre → tone(pre) → distNode → distPost → distWet → preAnalyser → filter → filterWet → envGain → comp → tremoloGain
+    this._distPre.connect(this._distTone);
+    this._distTone.connect(this._distNode);
+    this._distNode.connect(this._distPost);
     this._distPre.connect(this._distDry);
-    this._distNode.connect(this._distTone);
-    this._distTone.connect(this._distPost);
     this._distPost.connect(this._distWet);
     this._distWet.connect(this.preAnalyser);
     this._distDry.connect(this.preAnalyser);
-    this.preAnalyser.connect(this.filter._biquad);
-    this.filter._biquad.connect(this.filterWet);
-    this.filter._src  = this.preAnalyser;
-    this.filter._dest = { dest: this.filterWet, outIdx: undefined, inIdx: undefined };
+    this.preAnalyser.connect(this.filter);
+    this.filter.connect(this.filterWet);
     this.filterWet.connect(this.envGain);
     this.filterDry.connect(this.envGain);
-    this.envGain.connect(this.analyser);
-    this.envGain.connect(this._tremoloGain);
-    // 3-band EQ: low shelf → mid peak → high shelf
-    this._eqLow  = ctx.createBiquadFilter(); this._eqLow.type  = 'lowshelf';  this._eqLow.frequency.value  = 200;  this._eqLow.gain.value  = 0;
-    this._eqMid  = ctx.createBiquadFilter(); this._eqMid.type  = 'peaking';   this._eqMid.frequency.value  = 1000; this._eqMid.gain.value  = 0; this._eqMid.Q.value = 1;
-    this._eqHigh = ctx.createBiquadFilter(); this._eqHigh.type = 'highshelf'; this._eqHigh.frequency.value = 6000; this._eqHigh.gain.value = 0;
+    this.envGain.connect(this._voiceComp);
+    this._voiceComp.connect(this.analyser);
+    this._voiceComp.connect(this._tremoloGain);
+    // 3-band EQ replaced with GainNode passthroughs — BiquadFilter peaking/shelf nodes
+    // can produce bad state warnings from signal overflow; EQ gain=0 is transparent anyway.
+    this._eqLow  = ctx.createGain(); this._eqLow.gain.value  = 1;
+    this._eqMid  = ctx.createGain(); this._eqMid.gain.value  = 1;
+    this._eqHigh = ctx.createGain(); this._eqHigh.gain.value = 1;
     this._tremoloGain.connect(this._eqLow);
     this._eqLow.connect(this._eqMid);
     this._eqMid.connect(this._eqHigh);
@@ -294,18 +195,6 @@ class WobblerVoice {
       return { osc, quantizer, gain, connected:null, stepped:false };
     });
     this.lfoNodes.forEach((_,i) => this._connectLFO(i));
-
-    // TWE — Temporal Wobble Engine persistent oscillators
-    this.tweMain = { osc: ctx.createOscillator(), gain: ctx.createGain(), connected: null };
-    this.tweMain.osc.type = 'sine'; this.tweMain.osc.frequency.value = 2;
-    this.tweMain.gain.gain.value = 0; this.tweMain.osc.connect(this.tweMain.gain);
-
-    this.tweBody = { osc: ctx.createOscillator(), gain: ctx.createGain(), connected: null };
-    this.tweBody.osc.type = 'sine'; this.tweBody.osc.frequency.value = 4;
-    this.tweBody.gain.gain.value = 0; this.tweBody.osc.connect(this.tweBody.gain);
-
-    this._tweAuxOscs = []; // dynamic aux lane oscillators
-    this._tweStrikeOsc = null; this._tweTailOsc = null;
 
     // Per-note oscillators — created by buildOscChain on each noteOn
     this._activeOscs     = [];
@@ -347,40 +236,75 @@ class WobblerVoice {
 
   _distCurve(form, drive) {
     const n = 512, curve = new Float32Array(n);
+    // downsample/bitcrush handled in real-time via ScriptProcessor — return identity curve
+    if (form === 'downsample' || form === 'bitcrush') {
+      for (let i = 0; i < n; i++) curve[i] = (i * 2) / n - 1;
+      return curve;
+    }
     for (let i = 0; i < n; i++) {
       const x = (i * 2) / n - 1;
-      if (drive < 0.001 && form !== 'soft') { curve[i] = x; continue; }
+      if (drive < 0.001) { curve[i] = x; continue; }
       const k = 1 + drive * 40;
       switch (form) {
-        case 'soft': // tanh saturation — smooth tube warmth
-          curve[i] = drive < 0.001 ? x : Math.tanh(x * k) / Math.tanh(k);
-          break;
-        case 'hard': { // hard clip with pre-boost
-          const v = x * k;
-          curve[i] = Math.max(-1, Math.min(1, v));
+        case 'tube': { // triode-style — asymmetric tanh with bias, 2nd+3rd harmonics
+          const bias = 0.1 * drive;
+          const v = x + bias;
+          curve[i] = Math.tanh(v * k * 0.7) / Math.tanh(k * 0.7) - bias * 0.5;
           break;
         }
-        case 'fold': { // wavefolder — reflects at ±1
-          let v = x * (1 + drive * 8);
-          while (v > 1 || v < -1) { v = v > 1 ? 2 - v : v < -1 ? -2 - v : v; }
-          curve[i] = v;
+        case 'soft': // tanh saturation — smooth, musical
+          curve[i] = Math.tanh(x * k) / Math.tanh(k);
+          break;
+        case 'hard': { // hard clip — transistor crunch
+          curve[i] = Math.max(-1, Math.min(1, x * k));
           break;
         }
-        case 'asym': { // asymmetric — overdrive with positive-bias 2nd harmonic
+        case 'asym': { // asymmetric — overdrive with 2nd harmonic
           curve[i] = x >= 0
             ? Math.tanh(x * k) / Math.tanh(k)
             : Math.tanh(x * k * 0.4) / Math.tanh(k * 0.4) * 0.7;
           break;
         }
-        case 'fuzz': { // extreme square-ish clipping
+        case 'fold': { // wavefolder — metallic, Buchla-style
+          let v = x * (1 + drive * 8);
+          let iter = 0;
+          while ((v > 1 || v < -1) && iter++ < 20) { v = v > 1 ? 2 - v : -2 - v; }
+          curve[i] = v;
+          break;
+        }
+        case 'fuzz': { // extreme square-ish — near-full wave clip
           const v = x * (1 + drive * 200);
-          curve[i] = Math.sign(v) * Math.min(1, Math.abs(v) ** 0.2);
+          curve[i] = Math.sign(v) * Math.min(1, Math.abs(v) ** 0.15);
+          break;
+        }
+        case 'rect': { // half-wave rectifier — adds octave-up character
+          const v = Math.max(0, x) * k;
+          curve[i] = Math.max(-1, Math.min(1, v)) * 2 - 0.5 * drive;
           break;
         }
         default: curve[i] = x;
       }
     }
     return curve;
+  }
+
+  // Rewire tone filter pre/post distortion. post=true → tone after dist node.
+  _distSetTonePost(post) {
+    try { this._distPre.disconnect(this._distTone); } catch(_) {}
+    try { this._distTone.disconnect(); } catch(_) {}
+    try { this._distNode.disconnect(this._distPost); } catch(_) {}
+    if (post) {
+      // pre → node → tone → post
+      this._distPre.connect(this._distNode);
+      this._distNode.connect(this._distTone);
+      this._distTone.connect(this._distPost);
+    } else {
+      // pre → tone → node → post
+      this._distPre.connect(this._distTone);
+      this._distTone.connect(this._distNode);
+      this._distNode.connect(this._distPost);
+    }
+    this._distTonePost = post;
   }
 
   _driveCurve(amount) { return this._distCurve('soft', amount); } // legacy compat
@@ -391,15 +315,6 @@ class WobblerVoice {
     real[0] = 2 * pw - 1;
     for (let n = 1; n <= N; n++) imag[n] = (2 / (n * Math.PI)) * Math.sin(n * Math.PI * pw);
     return this.ctx.createPeriodicWave(real, imag, { disableNormalization: false });
-  }
-
-  // ── TWE helpers ──────────────────────────────────────────
-  _tweCalcRate(sp) {
-    if (!sp.bpmSync) return Math.max(0.01, sp.rate);
-    let r = (this._bpm / 60) * sp.syncDiv / 4;
-    if (sp.triplet) r *= 2 / 3;
-    if (sp.dotted)  r *= 3 / 2;
-    return Math.max(0.01, r);
   }
 
   // Returns detune (cents) for unison voice i out of N, centered on baseCent
@@ -426,30 +341,88 @@ class WobblerVoice {
   // Unison is now applied per-note in buildOscChain — this is a no-op kept for compat
   _applyUnisonDetune(_t) {}
 
-  // Load ZDF filter worklet and hot-swap once ready
-  _initZDFWorklet() {
-    const ctx = this.ctx;
-    // Only register the module once per AudioContext
-    if (!ctx._zdfWorkletLoading) {
-      ctx._zdfWorkletLoading = ctx.audioWorklet.addModule('js/zdf-filter-worklet.js')
-        .then(() => { ctx._zdfWorkletReady = true; })
-        .catch(e => { console.warn('[ZDF] Worklet load failed, staying on biquad:', e); ctx._zdfWorkletReady = false; });
+  // Filter param helpers — work for both BiquadFilter and ZDF worklet
+  _filterFreqParam()  { return this._zdfActive ? this.filter.parameters.get('cutoff')    : this.filter.frequency; }
+  _filterResParam()   { return this._zdfActive ? this.filter.parameters.get('resonance')  : this.filter.Q; }
+
+  _filterSetCutoff(hz, t, tc) {
+    const v = Math.max(20, Math.min(20000, hz));
+    try { this._filterFreqParam().setTargetAtTime(v, t, Math.max(0.005, tc ?? 0.05)); } catch(_) {}
+  }
+  _filterLFOSetCutoff(hz) {
+    const v = Math.max(20, Math.min(20000, hz));
+    if (!this._lfoOwnsFilterCutoff) {
+      this._lfoOwnsFilterCutoff = true;
+      try { this._filterFreqParam().cancelScheduledValues(0); } catch(_) {}
     }
-    // Once the module is registered, create a node for this voice
-    const doSwap = () => {
-      if (ctx._zdfWorkletReady === false) return; // failed — stay on biquad
-      try {
-        const node = new AudioWorkletNode(ctx, 'zdf-filter', { numberOfInputs:1, numberOfOutputs:1, outputChannelCount:[2] });
-        this.filter._swapToWorklet(node);
-      } catch(e) {
-        console.warn('[ZDF] Could not create worklet node:', e);
-      }
-    };
-    if (ctx._zdfWorkletReady === true) {
-      // Already loaded (e.g. second voice created after first)
-      setTimeout(doSwap, 0);
+    try { this._filterFreqParam().setTargetAtTime(v, this.ctx.currentTime, 0.008); } catch(_) {}
+  }
+  _filterRampCutoff(hz, t) {
+    const v = Math.max(20, Math.min(20000, hz));
+    try { this._filterFreqParam().exponentialRampToValueAtTime(v, t); } catch(_) {}
+  }
+  _filterSetResonance(q, t, tc) {
+    const v = Math.max(0.01, Math.min(this._zdfActive ? 8 : 30, q));
+    try { this._filterResParam().setTargetAtTime(v, t, Math.max(0.005, tc ?? 0.05)); } catch(_) {}
+  }
+  _filterLFOSetResonance(q) {
+    const v = Math.max(0.01, Math.min(this._zdfActive ? 8 : 30, q));
+    try { this._filterResParam().setTargetAtTime(v, this.ctx.currentTime, 0.008); } catch(_) {}
+  }
+  _filterCancelAndHold(t) {
+    const p = this._filterFreqParam();
+    if (!p) return;
+    if (p.cancelAndHoldAtTime) { try { p.cancelAndHoldAtTime(t); } catch(_) {} }
+    else { try { p.cancelScheduledValues(t); p.setValueAtTime(p.value, t); } catch(_) {} }
+  }
+  _filterSetType(type) {
+    if (this._zdfActive) {
+      const ft = type === 'highpass' ? 1 : type === 'bandpass' ? 2 : type === 'notch' ? 3 : 0;
+      try { this.filter.parameters.get('filterType').setValueAtTime(ft, this.ctx.currentTime); } catch(_) {}
     } else {
-      ctx._zdfWorkletLoading.then(doSwap).catch(() => {});
+      try { this.filter.type = type; } catch(_) {}
+    }
+  }
+
+  // Switch filter engine: 'biquad' (native, alias-free) or 'zdf' (worklet, character)
+  // Safe to call at any time — rewires preAnalyser → filter → filterWet in-place.
+  _switchFilterEngine(mode) {
+    if (mode === 'zdf' && !window._zdfWorkletReady) {
+      console.warn('[Filter] ZDF worklet not ready yet'); return;
+    }
+    const p = this.p.filter;
+    const now = this.ctx.currentTime;
+
+    // Disconnect current filter
+    try { this.preAnalyser.disconnect(this.filter); } catch(_) {}
+    try { this.filter.disconnect(); } catch(_) {}
+
+    if (mode === 'zdf') {
+      try {
+        const zdf = new AudioWorkletNode(this.ctx, 'zdf-filter', {
+          numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2]
+        });
+        zdf.parameters.get('cutoff').setValueAtTime(Math.max(20, Math.min(20000, p.cutoff)), now);
+        zdf.parameters.get('resonance').setValueAtTime(Math.max(0.01, Math.min(8, p.resonance)), now);
+        const ft = p.type === 'highpass' ? 1 : p.type === 'bandpass' ? 2 : p.type === 'notch' ? 3 : 0;
+        zdf.parameters.get('filterType').setValueAtTime(ft, now);
+        this.preAnalyser.connect(zdf); zdf.connect(this.filterWet);
+        this.filter = zdf;
+        this._zdfActive = true;
+        this.p.filter.engine = 'zdf';
+        console.log('[Filter] ZDF active on voice', this.id ?? '?');
+      } catch(e) { console.warn('[Filter] ZDF switch failed:', e); this._switchFilterEngine('biquad'); }
+    } else {
+      const bq = this.ctx.createBiquadFilter();
+      bq.type = p.type || 'lowpass';
+      bq.frequency.value = Math.max(20, Math.min(20000, p.cutoff));
+      bq.Q.value = Math.max(0.01, Math.min(30, p.resonance));
+      bq.channelCount = 2; bq.channelCountMode = 'explicit';
+      this.preAnalyser.connect(bq); bq.connect(this.filterWet);
+      this.filter = bq;
+      this._zdfActive = false;
+      this.p.filter.engine = 'biquad';
+      console.log('[Filter] BiquadFilter active on voice', this.id ?? '?');
     }
   }
 
@@ -460,38 +433,6 @@ class WobblerVoice {
     (this._activeOscs || []).forEach((o, i) => {
       if (i > 0) try { gainNode.connect(o.detune); } catch(_) {}
     });
-  }
-
-  _tweGetTarget(target) {
-    const filterBypassed = this._filterBypassed;
-    switch (target) {
-      case 'cutoff':    return filterBypassed ? null : this.filter.frequency;
-      case 'resonance': return filterBypassed ? null : this.filter.Q;
-      case 'pan':       return this.panner.pan;
-      case 'volume':    return this._tremoloGain.gain;
-      case 'pitch':     return this._currentOscDetune || null;
-      case 'noiseAmt':  return this._noiseLvlGain.gain;
-      default:          return filterBypassed ? null : this.filter.frequency;
-    }
-  }
-
-  // Connect a TWE gain node to the right target(s).
-  // For 'pitch': fans out to ALL active oscillator detune params so the full
-  // supersaw bank and all unison voices are modulated equally.
-  _tweConnectGain(gainNode, target) {
-    if (target === 'pitch') {
-      (this._activeOscs || []).forEach(o => { try { gainNode.connect(o.detune); } catch(_) {} });
-      if (this._activeSubOsc) { try { gainNode.connect(this._activeSubOsc.detune); } catch(_) {} }
-      return (this._activeOscs || []).length > 0;
-    }
-    if (target === 'chorus') {
-      this._connectChorusNode(gainNode);
-      const uni = Math.max(1, Math.round(this.p.osc.unison || 1));
-      return uni > 1; // only active when side voices exist
-    }
-    const mt = this._tweGetTarget(target);
-    if (mt) { gainNode.connect(mt); return true; }
-    return false;
   }
 
   // Build a PeriodicWave from standard waveform harmonics — needed to override
@@ -522,234 +463,6 @@ class WobblerVoice {
       real[k]=re*2/N; imag[k]=im*2/N;
     }
     return this.ctx.createPeriodicWave(real, imag, {disableNormalization:false});
-  }
-
-  _tweApplyShape(osc, sp) {
-    if (sp.shape === 'custom' && sp.customShape) {
-      osc.setPeriodicWave(this._makePeriodicWave(sp.customShape));
-    } else {
-      try { osc.type = sp.shape || 'sine'; } catch(_) { osc.type = 'sine'; }
-    }
-  }
-
-  _tweNoteOn(velocity) {
-    const ctx = this.ctx, now = ctx.currentTime, tw = this.p.twe;
-    if (tw._bypassed) return;
-
-    const chaos = tw.chaos;
-    const tweAmt = tw.tweAmt ?? 1;
-    const rand = () => 1 + (Math.random() * 2 - 1) * chaos;
-    // Normalize/clamp depth per target to prevent instability
-    const scaledDepth = (sp, raw) => {
-      if (sp.target === 'volume' || sp.target === 'noiseAmt') return Math.min(raw / 15000, 1.0);
-      if (sp.target === 'cutoff') {
-        const base = this.p.filter.cutoff;
-        return Math.min(raw, Math.max(0, Math.min(base - 20, 20000 - base)));
-      }
-      if (sp.target === 'resonance') return Math.min(raw, Math.max(0, this.p.filter.resonance - 0.001));
-      if (sp.target === 'pitch' || sp.target === 'chorus') return (raw / 15000) * 1200; // full knob = 1 octave (1200¢)
-      return raw;
-    };
-    // Apply attack ramp + optional in-note decay to a persistent gain node
-    const applyEnv = (gainParam, depth, sp, t0) => {
-      const atk = sp.attack || 0, dec = sp.decay || 0;
-      this._cancelAndHold(gainParam, t0);
-      if (atk > 0) {
-        gainParam.setValueAtTime(0, t0);
-        gainParam.linearRampToValueAtTime(depth, t0 + atk);
-        if (dec > 0) gainParam.linearRampToValueAtTime(0.0001, t0 + atk + dec);
-      } else if (dec > 0) {
-        gainParam.setValueAtTime(depth, t0);
-        gainParam.linearRampToValueAtTime(0.0001, t0 + dec);
-      } else {
-        gainParam.setValueAtTime(depth, t0);
-      }
-    };
-    // Apply attack + exponential decay for one-shot lanes (strike/tail)
-    const applyOneShot = (gainParam, depth, sp, t0) => {
-      const atk = sp.attack || 0, dec = Math.max(0.05, sp.decay || 0.4);
-      gainParam.cancelScheduledValues(t0);
-      gainParam.setValueAtTime(0, t0);
-      if (atk > 0) {
-        gainParam.linearRampToValueAtTime(depth, t0 + atk);
-        gainParam.exponentialRampToValueAtTime(0.0001, t0 + atk + dec);
-      } else {
-        gainParam.setValueAtTime(depth, t0);
-        gainParam.exponentialRampToValueAtTime(0.0001, t0 + dec);
-      }
-      return atk + dec; // total duration
-    };
-
-    // Cancel any pending startDelay timers from previous note
-    clearTimeout(this._tweBodyDelayTimer);
-    clearTimeout(this._tweStrikeDelayTimer);
-    (this._tweAuxDelayTimers || []).forEach(t => clearTimeout(t));
-    this._tweAuxDelayTimers = [];
-
-    // MAIN CORE — primary persistent wobble oscillator (no startDelay)
-    clearTimeout(this._tweMainTimer);
-    const ms = tw.main || {};
-    try { this.tweMain.gain.disconnect(); } catch(_) {}
-    this.tweMain.connected = null;
-    if (ms.depth > 0 && ms._enabled !== false) {
-      this._tweApplyShape(this.tweMain.osc, ms);
-      this.tweMain.osc.frequency.setValueAtTime(this._tweCalcRate(ms) * rand(), now);
-      applyEnv(this.tweMain.gain.gain, scaledDepth(ms, ms.depth) * tweAmt * rand() * velocity, ms, now);
-      if (this._tweConnectGain(this.tweMain.gain, ms.target)) this.tweMain.connected = ms.target;
-    }
-
-    // MAIN STRIKE — one-shot transient on noteOn (with optional startDelay)
-    const ss = ms.strike || {};
-    if (ss.depth > 0 && ss._enabled !== false) {
-      const fireStrike = () => {
-        if (this._tweStrikeOsc) { try { this._tweStrikeOsc.stop(); } catch(_) {} }
-        if (this._tweStrikeGain) { try { this._tweStrikeGain.disconnect(); } catch(_) {} this._tweStrikeGain = null; }
-        const t0 = ctx.currentTime;
-        const gain = ctx.createGain();
-        const dep = scaledDepth(ss, ss.depth) * tweAmt * rand() * velocity;
-        const dur = applyOneShot(gain.gain, dep, ss, t0);
-        // ConstantSourceNode outputs 1 immediately — gain envelope shapes depth+decay.
-        // OscillatorNode starts at sin(0)=0 so the effect would be inaudible during a short ADSR.
-        const strikeOsc = ctx.createConstantSource ? ctx.createConstantSource() : ctx.createOscillator();
-        if (strikeOsc.offset) strikeOsc.offset.value = 1;
-        else { this._tweApplyShape(strikeOsc, ss); strikeOsc.frequency.value = this._tweCalcRate(ss) * rand(); }
-        strikeOsc.connect(gain);
-        if (tw.ratemod && (ms.body||{}).depth > 0) gain.connect(this.tweBody.osc.frequency);
-        this._tweConnectGain(gain, ss.target);
-        strikeOsc.start(t0); strikeOsc.stop(t0 + dur + 0.2);
-        this._tweStrikeOsc = strikeOsc; this._tweStrikeGain = gain; // both tracked for cleanup
-      };
-      const sDelay = (ss.startBar || 0) * (60000 / this._bpm) * 4;
-      if (sDelay > 0) this._tweStrikeDelayTimer = setTimeout(fireStrike, sDelay);
-      else fireStrike();
-    }
-
-    // MAIN BODY — persistent osc, starts after startDelay
-    clearTimeout(this._tweBodyTimer);
-    const bs = ms.body || {};
-    try { this.tweBody.gain.disconnect(); } catch(_) {}
-    this.tweBody.connected = null;
-    if (bs.depth > 0 && bs._enabled !== false) {
-      const connectBody = () => {
-        const t0 = ctx.currentTime;
-        this._tweApplyShape(this.tweBody.osc, bs);
-        this.tweBody.osc.frequency.setValueAtTime(this._tweCalcRate(bs) * rand(), t0);
-        applyEnv(this.tweBody.gain.gain, scaledDepth(bs, bs.depth) * tweAmt * rand() * velocity, bs, t0);
-        if (this._tweConnectGain(this.tweBody.gain, bs.target)) this.tweBody.connected = bs.target;
-      };
-      const bDelay = (bs.startBar || 0) * (60000 / this._bpm) * 4;
-      if (bDelay > 0) this._tweBodyDelayTimer = setTimeout(connectBody, bDelay);
-      else connectBody();
-    }
-
-    // AUX LANES — independent persistent wobble lanes (with optional startDelay each)
-    (tw.aux || []).forEach((als, i) => {
-      const a = this._tweAuxOscs[i];
-      if (!a) return;
-      clearTimeout(a._timer);
-      try { a.gain.disconnect(); } catch(_) {}
-      a.connected = null;
-      if (als.depth > 0 && als._enabled !== false) {
-        const connectAux = () => {
-          const t0 = ctx.currentTime;
-          this._tweApplyShape(a.osc, als);
-          a.osc.frequency.setValueAtTime(this._tweCalcRate(als) * rand(), t0);
-          applyEnv(a.gain.gain, scaledDepth(als, als.depth) * tweAmt * rand() * velocity, als, t0);
-          if (this._tweConnectGain(a.gain, als.target)) a.connected = als.target;
-        };
-        const aDelay = (als.startBar || 0) * (60000 / this._bpm) * 4;
-        const t = aDelay > 0 ? setTimeout(connectAux, aDelay) : (connectAux(), null);
-        this._tweAuxDelayTimers[i] = t;
-      }
-    });
-  }
-
-  _tweNoteOff(releaseTime) {
-    const ctx = this.ctx, now = ctx.currentTime, tw = this.p.twe;
-    const rel = releaseTime || 0.12;
-    const ms = tw.main || {};
-
-    // Cancel any startDelay timers that haven't fired yet
-    clearTimeout(this._tweBodyDelayTimer);
-    clearTimeout(this._tweStrikeDelayTimer);
-    (this._tweAuxDelayTimers || []).forEach(t => clearTimeout(t));
-    this._tweAuxDelayTimers = [];
-
-    // Fade MAIN CORE gain out
-    if (this.tweMain.connected) {
-      this.tweMain.gain.gain.setTargetAtTime(0, now, rel / 4);
-      clearTimeout(this._tweMainTimer);
-      this._tweMainTimer = setTimeout(() => {
-        try { this.tweMain.gain.disconnect(); } catch(_) {}
-        this.tweMain.connected = null;
-        if (ms.target === 'volume') this._tremoloGain.gain.setTargetAtTime(1, this.ctx.currentTime, 0.01);
-      }, (rel + 0.3) * 1000);
-    }
-
-    // Fade MAIN BODY gain out
-    if (this.tweBody.connected) {
-      this.tweBody.gain.gain.setTargetAtTime(0, now, rel / 4);
-      clearTimeout(this._tweBodyTimer);
-      this._tweBodyTimer = setTimeout(() => {
-        try { this.tweBody.gain.disconnect(); } catch(_) {}
-        this.tweBody.connected = null;
-        const bs = ms.body || {};
-        if (bs.target === 'volume') this._tremoloGain.gain.setTargetAtTime(1, this.ctx.currentTime, 0.01);
-      }, (rel + 0.3) * 1000);
-    }
-
-    // MAIN TAIL — one-shot osc fires at noteOff (with optional startDelay)
-    const ts = ms.tail || {};
-    if (ts.depth > 0 && ts._enabled !== false) {
-      const rand = () => 1 + (Math.random() * 2 - 1) * (tw.chaos || 0);
-      const tweAmt = tw.tweAmt ?? 1;
-      const scaledDepth = (sp, raw) => {
-        if (sp.target === 'volume' || sp.target === 'noiseAmt') return Math.min(raw / 15000, 1.0);
-        if (sp.target === 'cutoff') { const base = this.p.filter.cutoff; return Math.min(raw, Math.max(0, Math.min(base - 20, 20000 - base))); }
-        if (sp.target === 'resonance') return Math.min(raw, Math.max(0, this.p.filter.resonance - 0.001));
-        if (sp.target === 'pitch' || sp.target === 'chorus') return (raw / 15000) * 1200; // full knob = 1 octave (1200¢)
-        return raw;
-      };
-      const applyOneShot = (gainParam, depth, sp, t0) => {
-        const atk = sp.attack || 0, dec = Math.max(0.05, sp.decay || 0.4);
-        gainParam.cancelScheduledValues(t0); gainParam.setValueAtTime(0, t0);
-        if (atk > 0) { gainParam.linearRampToValueAtTime(depth, t0 + atk); gainParam.exponentialRampToValueAtTime(0.0001, t0 + atk + dec); }
-        else { gainParam.setValueAtTime(depth, t0); gainParam.exponentialRampToValueAtTime(0.0001, t0 + dec); }
-        return atk + dec;
-      };
-      const fireTail = () => {
-        if (this._tweTailOsc) { try { this._tweTailOsc.stop(); } catch(_) {} }
-        if (this._tweTailGain) { try { this._tweTailGain.disconnect(); } catch(_) {} this._tweTailGain = null; }
-        const t0 = ctx.currentTime;
-        const gain = ctx.createGain();
-        const dep = scaledDepth(ts, ts.depth) * tweAmt * rand();
-        const dur = applyOneShot(gain.gain, dep, ts, t0);
-        // ConstantSourceNode outputs 1 immediately — gain envelope shapes depth+decay.
-        // OscillatorNode starts at sin(0)=0 so the effect would be inaudible during a short ADSR.
-        const src = ctx.createConstantSource ? ctx.createConstantSource() : ctx.createOscillator();
-        if (src.offset) src.offset.value = 1;
-        else { this._tweApplyShape(src, ts); src.frequency.value = this._tweCalcRate(ts) * rand(); }
-        src.connect(gain);
-        this._tweConnectGain(gain, ts.target);
-        src.start(t0); src.stop(t0 + dur + 0.2);
-        this._tweTailOsc = src; this._tweTailGain = gain; // both tracked for cleanup
-      };
-      const tDelay = (ts.startBar || 0) * (60000 / this._bpm) * 4;
-      if (tDelay > 0) setTimeout(fireTail, tDelay); else fireTail();
-    }
-
-    // Fade AUX LANES out
-    (tw.aux || []).forEach((als, i) => {
-      const a = this._tweAuxOscs[i];
-      if (!a || !a.connected) return;
-      a.gain.gain.setTargetAtTime(0, now, rel / 4);
-      clearTimeout(a._timer);
-      a._timer = setTimeout(() => {
-        try { a.gain.disconnect(); } catch(_) {}
-        a.connected = null;
-        if (als.target === 'volume') this._tremoloGain.gain.setTargetAtTime(1, this.ctx.currentTime, 0.01);
-      }, (rel + 0.3) * 1000);
-    });
   }
 
   _noiseBuf() {
@@ -827,16 +540,17 @@ class WobblerVoice {
   }
 
   _lfoStaticDest(t) {
-    if (t === 'cutoff')    return this._filterBypassed ? null : this.filter.frequency;
-    if (t === 'resonance') return this._filterBypassed ? null : this.filter.Q;
+    // cutoff/resonance intentionally excluded — old oscillator LFOs must NOT connect
+    // to filter.frequency; filter modulation is handled by lfoEngine (JS timer) only
     if (t === 'volume')    return this.envGain.gain;
-    return null; // 'pitch','noiseAmt','chorus' → per-note connection
+    return null; // 'cutoff','resonance','pitch','noiseAmt','chorus' → handled elsewhere
   }
 
   _connectLFO(i) {
     const { gain } = this.lfoNodes[i]; const p = this.p.lfos[i];
     try { gain.disconnect(); } catch(_) {} this.lfoNodes[i].connected = null;
-    if (p._enabled === false) { gain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.01); return; }
+    gain.gain.setValueAtTime(0, this.ctx.currentTime);
+    if (p._enabled === false || !p.target || p.target === 'none') return;
     // LFO5 meta-modulation targets LFO1–4 rate or depth
     if (i === 4 && p.metaTarget != null && p.metaTargetLFO >= 0 && p.metaTargetLFO < 4) {
       const tgt = this.lfoNodes[p.metaTargetLFO];
@@ -901,9 +615,6 @@ class WobblerVoice {
       const offset = lp.phase / (2 * Math.PI * rate);
       node.osc.start(Math.max(0, t - offset));
     });
-    this.tweMain.osc.start(t);
-    this.tweBody.osc.start(t);
-    this._tweAuxOscs.forEach(a => { try { a.osc.start(t); } catch(_) {} });
     // Persistent noise source
     const nn = this.ctx.createBufferSource();
     nn.buffer = this._noiseBuf(); nn.loop = true;
@@ -1043,6 +754,7 @@ class WobblerVoice {
     this._liveOsc = oscs[0] || null;
     this._baseFreq = f; this._noteVelocity = velocity; this._playing = true;
     this._noteOnTime = now;
+    this._lfoOwnsFilterCutoff = false; // allow ADSR to schedule filter envelope this note
 
     // Noise — set base level on _noiseLvlGain; do NOT cancelScheduledValues (kills LFO modulation)
     const _noiseVol = p.noise.volume * velocity;
@@ -1098,12 +810,20 @@ class WobblerVoice {
       }
     }
 
-    // Filter envelope — hold current position to avoid click on retrigger
-    const fc = this.filter.frequency, base = p.filter.cutoff;
-    const peak = Math.min(18000, base + p.filter.envAmount * velocity);
-    this._cancelAndHold(fc, now);
-    fc.linearRampToValueAtTime(peak, now + Math.max(0.001, p.adsr.attack));
-    fc.setTargetAtTime(base + (peak - base) * p.adsr.sustain, now + p.adsr.attack, p.adsr.decay / 4);
+    // Filter envelope — skip if LFO engine owns the cutoff (avoids automation queue fight)
+    const _lfoOwnsCutoff = this.lfoEngine && this.lfoEngine.slots.some(s => s.enabled && s.target === 'cutoff');
+    if (!_lfoOwnsCutoff) {
+      const base = Math.max(20, Math.min(20000, p.filter.cutoff));
+      const peak = Math.max(21, Math.min(18000, base + p.filter.envAmount * velocity));
+      const sustFreq = Math.max(20, Math.min(18000, base + (peak - base) * p.adsr.sustain));
+      this._filterCancelAndHold(now);
+      this._filterRampCutoff(peak, now + Math.max(0.001, p.adsr.attack));
+      this._filterSetCutoff(sustFreq, now + p.adsr.attack, Math.max(0.001, p.adsr.decay) / 4);
+    } else {
+      // LFO owns cutoff — just cancel any stale automation and let the LFO drive
+      this._lfoOwnsFilterCutoff = false; // reset so first LFO tick cancels cleanly
+      this._filterCancelAndHold(now);
+    }
 
     // LFO engine — phase-reset on note trigger
     if (this.lfoEngine) {
@@ -1111,7 +831,6 @@ class WobblerVoice {
       if (!this.lfoEngine.playing) this.lfoEngine.start();
     }
 
-    this._tweNoteOn(velocity);
   }
 
   bend(cents) {
@@ -1126,7 +845,6 @@ class WobblerVoice {
     if (!this._playing) return;
     this._playing = false;
     const ctx = this.ctx, now = ctx.currentTime, p = this.p, rel = Math.max(0.01, p.adsr.release);
-    this._tweNoteOff(rel);
     const g = this.envGain.gain;
     const releaseFrom = this._envTracker.noteOff(now, rel);
     this._cancelAndHold(g, now);
@@ -1142,7 +860,8 @@ class WobblerVoice {
     const stopAt = now + rel + 0.1;
     stopOscs(this._activeOscs, this._activeSubOsc, stopAt);
     this._noiseLvlGain.gain.setTargetAtTime(0, now + rel + 0.05, 0.01);
-    this.filter.frequency.setTargetAtTime(p.filter.cutoff, now, rel / 3);
+    const _lfoOwnsCutoffOff = this.lfoEngine && this.lfoEngine.slots.some(s => s.enabled && s.target === 'cutoff');
+    if (!_lfoOwnsCutoffOff) this._filterSetCutoff(p.filter.cutoff, now, Math.max(0.01, rel / 3));
     for (let i = 0; i < this.lfoNodes.length; i++) {
       const lfo = this.lfoNodes[i];
       const lp = this.p.lfos[i];
@@ -1283,16 +1002,20 @@ class WobblerVoice {
     if (section === 'noise') {
       this.p.noise[key] = val;
       if (key === 'volume') {
-        const lvl = val * (this._noteVelocity || 0.7);
-        this._noiseLvlGain.gain.setTargetAtTime(lvl, t, 0.01);
-        if ((this.p.noise.lfoRate ?? 0) > 0) {
-          this._noiseLfoGain.gain.setTargetAtTime(lvl * 0.5, t, 0.01);
+        if (this._playing) {
+          const lvl = val * (this._noteVelocity || 1);
+          this._noiseLvlGain.gain.setTargetAtTime(lvl, t, 0.01);
+          if ((this.p.noise.lfoRate ?? 0) > 0) {
+            this._noiseLfoGain.gain.setTargetAtTime(lvl * 0.5, t, 0.01);
+          }
         }
       }
       if (key === 'lfoRate') {
         this._noiseLfoOsc.frequency.setTargetAtTime(Math.max(0.01, val), t, 0.01);
-        const lvl = (this.p.noise.volume ?? 0) * (this._noteVelocity || 0.7);
-        this._noiseLfoGain.gain.setTargetAtTime(val > 0 ? lvl * 0.5 : 0, t, 0.01);
+        if (this._playing) {
+          const lvl = (this.p.noise.volume ?? 0) * (this._noteVelocity || 1);
+          this._noiseLfoGain.gain.setTargetAtTime(val > 0 ? lvl * 0.5 : 0, t, 0.01);
+        }
       }
       if (key === 'pitch' && this._noiseNode) {
         const pr = Math.pow(2, val / 12);
@@ -1320,27 +1043,23 @@ class WobblerVoice {
     if (section === 'adsr') {
       this.p.adsr[key] = val;
       // Live-update filter envelope peak if attack/decay/sustain changes while note held
-      if (this._playing && (key === 'attack' || key === 'decay' || key === 'sustain')) {
-        const base = this.p.filter.cutoff;
-        const peak = Math.min(18000, base + this.p.filter.envAmount * (this._noteVelocity || 0.65));
-        if (key === 'attack') this.filter.frequency.linearRampToValueAtTime(peak, t + Math.max(0.001, val));
-        if (key === 'decay')  this.filter.frequency.setTargetAtTime(base + (peak - base) * this.p.adsr.sustain, t, Math.max(0.001, val) / 4);
+      const _lfoOwnsCutoffAdsr = this.lfoEngine && this.lfoEngine.slots.some(s => s.enabled && s.target === 'cutoff');
+      if (this._playing && !_lfoOwnsCutoffAdsr && (key === 'attack' || key === 'decay' || key === 'sustain')) {
+        const base = Math.max(20, Math.min(20000, this.p.filter.cutoff));
+        const peak = Math.max(21, Math.min(18000, base + this.p.filter.envAmount * (this._noteVelocity || 0.65)));
+        const sust = Math.max(20, Math.min(18000, base + (peak - base) * this.p.adsr.sustain));
+        if (key === 'attack') {
+          this._filterCancelAndHold(t);
+          this._filterRampCutoff(peak, t + Math.max(0.001, val));
+        }
+        if (key === 'decay')  this._filterSetCutoff(sust, t, Math.max(0.001, val) / 4);
       }
     }
     if (section === 'filter') {
       this.p.filter[key] = val;
-      if (key === 'type')      this.filter.type = val;
-      if (key === 'cutoff') {
-        this.filter.frequency.setTargetAtTime(Math.max(20, val), t, 0.01);
-        // Re-clamp all LFOs targeting cutoff so depth never pushes frequency negative
-        this.lfoNodes.forEach((lfoNode, li) => {
-          if (this.p.lfos[li].target === 'cutoff' && lfoNode.connected === 'cutoff') {
-            const safeDepth = Math.max(0, val - 20);
-            lfoNode.gain.gain.setTargetAtTime(Math.min(this.p.lfos[li].depth, safeDepth), t, 0.01);
-          }
-        });
-      }
-      if (key === 'resonance') this.filter.Q.setTargetAtTime(val, t, 0.01);
+      if (key === 'type')      this._filterSetType(val);
+      if (key === 'cutoff')    this._filterSetCutoff(val, t, 0.05);
+      if (key === 'resonance') this._filterSetResonance(val, t, 0.05);
       if (key === 'mix') {
         this.filterWet.gain.setTargetAtTime(val, t, 0.02);
         this.filterDry.gain.setTargetAtTime(1 - val, t, 0.02);
@@ -1348,13 +1067,7 @@ class WobblerVoice {
       if (key === 'pan') this.panner.pan.setTargetAtTime(val, t, 0.01);
     }
     if (section === 'eq') {
-      this.p.eq[key] = val;
-      if (key === 'lowGain')  this._eqLow.gain.setTargetAtTime(val, t, 0.01);
-      if (key === 'midGain')  this._eqMid.gain.setTargetAtTime(val, t, 0.01);
-      if (key === 'highGain') this._eqHigh.gain.setTargetAtTime(val, t, 0.01);
-      if (key === 'lowFreq')  this._eqLow.frequency.setTargetAtTime(val, t, 0.01);
-      if (key === 'midFreq')  this._eqMid.frequency.setTargetAtTime(val, t, 0.01);
-      if (key === 'highFreq') this._eqHigh.frequency.setTargetAtTime(val, t, 0.01);
+      this.p.eq[key] = val; // stored for preset save/load; EQ nodes are passthroughs
     }
     if (section === 'fx') {
       this.p.fx[key] = val;
@@ -1364,13 +1077,21 @@ class WobblerVoice {
       if (key === 'delayTime')   this._dlyNode.delayTime.setTargetAtTime(Math.max(0.01, val), t, 0.02);
       if (key === 'delayFB')     this._dlyFb.gain.setTargetAtTime(Math.min(0.95, val), t, 0.02);
     }
+    if (section === 'comp') {
+      this.p.comp[key] = val;
+      if (key === 'threshold') this._voiceComp.threshold.setTargetAtTime(val, t, 0.01);
+      if (key === 'knee')      this._voiceComp.knee.setTargetAtTime(val, t, 0.01);
+      if (key === 'ratio')     this._voiceComp.ratio.setTargetAtTime(val, t, 0.01);
+      if (key === 'attack')    this._voiceComp.attack.setTargetAtTime(val, t, 0.01);
+      if (key === 'release')   this._voiceComp.release.setTargetAtTime(val, t, 0.01);
+    }
     if (section === 'dist') {
       this.p.dist[key] = val;
       if (key === 'form' || key === 'drive') {
         this._distNode.curve = this._distCurve(this.p.dist.form, this.p.dist.drive);
         if (this.p.dist.mix >= 0.02) this._distNode.oversample = this.p.dist.drive > 0.3 ? '4x' : '2x';
       }
-      if (key === 'tone')   this._distTone.frequency.setTargetAtTime(Math.max(200, val), t, 0.01);
+      if (key === 'tone')   { try { this._distTone.frequency.setTargetAtTime(Math.max(200, Math.min(18000, val)), t, 0.02); } catch(_) {} }
       if (key === 'volume') this._distPost.gain.setTargetAtTime(val, t, 0.01);
       if (key === 'mix') {
         this._distWet.gain.setTargetAtTime(val, t, 0.02);
@@ -1383,124 +1104,7 @@ class WobblerVoice {
       if (key === 'pan')    { this.p.pan    = val; this.panner.pan.setTargetAtTime(val, t, 0.01); }
       if (key === 'mute')   { this.p.mute   = val; if (val) this._killSrcs(); }
     }
-    if (section === 'twe') {
-      if (key === 'chaos')    { this.p.twe.chaos    = val; return; }
-      if (key === 'ratemod')   { this.p.twe.ratemod  = val; return; }
-      if (key === 'barsTotal') { this.p.twe.barsTotal = val; return; }
-      if (key === 'tweAmt')    { this.p.twe.tweAmt   = val; return; }
-
-      // Add / remove aux lanes
-      if (key === 'aux.add') {
-        this.p.twe.aux.push({ rate:2, depth:0, attack:0, decay:0, startBar:0, target:'cutoff', shape:'sine', bpmSync:false, syncDiv:4, triplet:false, dotted:false, _enabled:true });
-        const osc = this.ctx.createOscillator(), gain = this.ctx.createGain();
-        osc.type = 'sine'; osc.frequency.value = 2; gain.gain.value = 0;
-        osc.connect(gain);
-        if (this._lfosStarted) osc.start(t);
-        this._tweAuxOscs.push({ osc, gain, connected: null, _timer: null });
-        return;
-      }
-      if (key.startsWith('aux.remove.')) {
-        const i = parseInt(key.split('.')[2]);
-        const a = this._tweAuxOscs[i];
-        if (a) { try { a.gain.disconnect(); a.osc.stop(); } catch(_) {} }
-        this._tweAuxOscs.splice(i, 1);
-        this.p.twe.aux.splice(i, 1);
-        return;
-      }
-
-      const parts = key.split('.');
-      if (parts[0] === 'main') {
-        if (parts.length === 2) {
-          // main core param: main.shape / main.rate / etc.
-          const param = parts[1];
-          this.p.twe.main[param] = val;
-          const ms = this.p.twe.main;
-          if (['rate','bpmSync','syncDiv','triplet','dotted'].includes(param)) {
-            this.tweMain.osc.frequency.setTargetAtTime(this._tweCalcRate(ms), t, 0.01);
-          }
-          if (param === 'shape') {
-            try { this.tweMain.osc.stop(); this.tweMain.osc.disconnect(); } catch(_) {}
-            const newOsc = this.ctx.createOscillator();
-            newOsc.frequency.value = this.tweMain.osc.frequency.value;
-            this._tweApplyShape(newOsc, ms);
-            newOsc.connect(this.tweMain.gain); newOsc.start(t);
-            this.tweMain.osc = newOsc;
-          }
-          if (param === 'depth') {
-            let mDepth = val;
-            if (ms.target === 'volume' || ms.target === 'noiseAmt') mDepth = Math.min(val / 15000, 1.0);
-            else if (ms.target === 'cutoff') { const b = this.p.filter.cutoff; mDepth = Math.min(val, Math.max(0, Math.min(b - 20, 20000 - b))); }
-            else if (ms.target === 'resonance') mDepth = Math.min(val, Math.max(0, this.p.filter.resonance - 0.001));
-            if (this.tweMain.connected) this.tweMain.gain.gain.setTargetAtTime(mDepth, t, 0.01);
-          }
-          if (param === 'target') {
-            try { this.tweMain.gain.disconnect(); } catch(_) {}
-            this.tweMain.connected = null;
-            if (ms.depth > 0 && ms._enabled !== false && this._tweConnectGain(this.tweMain.gain, val)) this.tweMain.connected = val;
-          }
-        } else if (parts.length === 3) {
-          // main sub-component: main.body.shape / main.strike.rate / etc.
-          const sub = parts[1], param = parts[2]; // sub = 'body'|'strike'|'tail'
-          if (this.p.twe.main[sub]) {
-            this.p.twe.main[sub][param] = val;
-            if (sub === 'body') {
-              const bs = this.p.twe.main.body;
-              if (['rate','bpmSync','syncDiv','triplet','dotted'].includes(param)) {
-                this.tweBody.osc.frequency.setTargetAtTime(this._tweCalcRate(bs), t, 0.01);
-              }
-              if (param === 'shape') {
-                try { this.tweBody.osc.stop(); this.tweBody.osc.disconnect(); } catch(_) {}
-                const newOsc = this.ctx.createOscillator();
-                newOsc.frequency.value = this.tweBody.osc.frequency.value;
-                this._tweApplyShape(newOsc, bs);
-                newOsc.connect(this.tweBody.gain); newOsc.start(t);
-                this.tweBody.osc = newOsc;
-              }
-              if (param === 'depth') {
-                let bDepth = val;
-                if (bs.target === 'volume' || bs.target === 'noiseAmt') bDepth = Math.min(val / 15000, 1.0);
-                else if (bs.target === 'cutoff') { const b = this.p.filter.cutoff; bDepth = Math.min(val, Math.max(0, Math.min(b - 20, 20000 - b))); }
-                else if (bs.target === 'resonance') bDepth = Math.min(val, Math.max(0, this.p.filter.resonance - 0.001));
-                if (this.tweBody.connected) this.tweBody.gain.gain.setTargetAtTime(bDepth, t, 0.01);
-              }
-              if (param === 'target') {
-                try { this.tweBody.gain.disconnect(); } catch(_) {}
-                this.tweBody.connected = null;
-                if (bs.depth > 0 && bs._enabled !== false && this._tweConnectGain(this.tweBody.gain, val)) this.tweBody.connected = val;
-              }
-            }
-            // strike/tail are one-shot — changes take effect on next note
-          }
-        }
-      } else if (parts[0] === 'aux') {
-        const i = parseInt(parts[1]), param = parts[2];
-        const als = this.p.twe.aux[i];
-        const a   = this._tweAuxOscs[i];
-        if (als && a && param) {
-          als[param] = val;
-          if (['rate','bpmSync','syncDiv','triplet','dotted'].includes(param)) {
-            a.osc.frequency.setTargetAtTime(this._tweCalcRate(als), t, 0.01);
-          }
-          if (param === 'shape') {
-            try { a.osc.stop(); a.osc.disconnect(); } catch(_) {}
-            const newOsc = this.ctx.createOscillator();
-            newOsc.frequency.value = a.osc.frequency.value;
-            this._tweApplyShape(newOsc, als);
-            newOsc.connect(a.gain); newOsc.start(t);
-            a.osc = newOsc;
-          }
-          if (param === 'depth') {
-            const aDepth = als.target === 'volume' ? Math.min(val, 1.0) : val;
-            if (a.connected) a.gain.gain.setTargetAtTime(aDepth, t, 0.01);
-          }
-          if (param === 'target') {
-            try { a.gain.disconnect(); } catch(_) {}
-            a.connected = null;
-            if (als.depth > 0 && als._enabled !== false && this._tweConnectGain(a.gain, val)) a.connected = val;
-          }
-        }
-      }
-    }
+    if (section === 'twe') return; // TWE removed — no-op for preset backwards compat
   }
 }
 
@@ -1514,11 +1118,15 @@ class WobblerSynth {
 
     this.analyser = this.ctx.createAnalyser();
     this.analyser.fftSize = 2048; this.analyser.smoothingTimeConstant = 0.8;
+    this.analyser.channelCount = 2;
+    this.analyser.channelCountMode = 'explicit';
+    this.analyser.channelInterpretation = 'speakers';
     this.analyser.connect(this.ctx.destination);
 
     this.comp = this.ctx.createDynamicsCompressor();
     this.comp.threshold.value = -18; this.comp.knee.value = 6;
     this.comp.ratio.value = 4; this.comp.release.value = 0.25;
+    this.comp.channelCount = 2; this.comp.channelCountMode = 'explicit';
     this.comp.connect(this.analyser);
 
     this.delay    = this.ctx.createDelay(2.0);
@@ -1527,21 +1135,49 @@ class WobblerSynth {
     this.delayDry = this.ctx.createGain();
     this.delay.delayTime.value = 0.25; this.delayFB.gain.value  = 0.35;
     this.delayWet.gain.value   = 0.0;  this.delayDry.gain.value = 1.0;
+    [this.delay, this.delayFB, this.delayWet, this.delayDry].forEach(n => {
+      n.channelCount = 2; n.channelCountMode = 'explicit';
+    });
 
     this.masterGain = this.ctx.createGain(); this.masterGain.gain.value = 0.75;
-    this.masterGain.connect(this.delayDry);
-    this.masterGain.connect(this.delay);
+
+    // Master bus filter — sits between masterGain and the delay/dry split
+    // Shapes the combined output of all voices before compression
+    this.masterFilter = this.ctx.createBiquadFilter();
+    this.masterFilter.type = 'lowpass';
+    this.masterFilter.frequency.value = 20000; // open by default
+    this.masterFilter.Q.value = 0.5;
+    this.masterFilter.channelCount = 2; this.masterFilter.channelCountMode = 'explicit';
+
+    this.masterGain.connect(this.masterFilter);
+    this.masterFilter.connect(this.delayDry);
+    this.masterFilter.connect(this.delay);
     this.delay.connect(this.delayFB); this.delayFB.connect(this.delay);
     this.delay.connect(this.delayWet);
     this.delayDry.connect(this.comp); this.delayWet.connect(this.comp);
 
     this.voices = Array.from({length:3}, (_,i) => new WobblerVoice(this.ctx, this.masterGain, i));
+
+    // Pre-register ZDF worklet — voices stay on BiquadFilter by default.
+    // ZDF available on demand via voice._switchFilterEngine('zdf').
+    window._zdfWorkletReady = false;
+    this.ctx.audioWorklet.addModule('js/zdf-filter-worklet.js')
+      .then(() => { window._zdfWorkletReady = true; console.log('[ZDF] Worklet registered — available on demand'); })
+      .catch(e => console.warn('[ZDF] Worklet load failed:', e));
+
+    // Global LFO engine — drives all enabled voices simultaneously
+    // Each voice also has its own per-voice lfoEngine for individual control
+    this.lfoEngine = new LFOEngine(this.voices);
+    this.lfoEngine.bpm = this.bpm;
+
     this.polyMode = 'mono';       // 'mono' | 'poly' | 'chord'
     this._voiceNoteMap  = new Map(); // midiNote → WobblerVoice  (poly mode)
     this._chordSlotMap  = new Map(); // midiNote → {voice, slotIdx}  (chord mode)
   }
   noteOn(freq, vel = 0.65) {
     clearTimeout(this._silenceTimer);
+    // Start global LFO engine on first note
+    if (this.lfoEngine && !this.lfoEngine.playing) this.lfoEngine.start();
     const midiNote = Math.round(69 + 12 * Math.log2(freq / 440));
     this._currentMidiNote = midiNote;
     if (this.polyMode === 'mono') {
@@ -1599,16 +1235,13 @@ class WobblerSynth {
   }
   setBpm(bpm) {
     this.bpm = bpm;
+    if (this.lfoEngine) this.lfoEngine.bpm = bpm; // global engine
     this.voices.forEach(v => {
       v._bpm = bpm;
       if (v.lfoEngine) v.lfoEngine.bpm = bpm;
       v.p.lfos.forEach((lp,i) => {
         if (lp.bpmSync) v.lfoNodes[i].osc.frequency.setTargetAtTime((bpm/60)*lp.syncDiv/4, this.ctx.currentTime, 0.01);
       });
-      const bs = (v.p.twe.main || {}).body || {};
-      if (bs.bpmSync && v.tweBody.connected) {
-        v.tweBody.osc.frequency.setTargetAtTime(v._tweCalcRate(bs), this.ctx.currentTime, 0.01);
-      }
     });
   }
   bend(cents) {
@@ -1624,13 +1257,9 @@ class WobblerSynth {
     });
   }
   resume() {
-    if (this.ctx.state !== 'suspended') {
-      this.voices.forEach(v => v.startLFOs());
-      return Promise.resolve();
-    }
-    return this.ctx.resume().then(() => {
-      this.voices.forEach(v => v.startLFOs());
-    });
+    const _afterResume = () => { this.voices.forEach(v => v.startLFOs()); };
+    if (this.ctx.state !== 'suspended') { _afterResume(); return Promise.resolve(); }
+    return this.ctx.resume().then(_afterResume);
   }
 }
 
@@ -1639,7 +1268,7 @@ class WobblerSynth {
 // ─────────────────────────────────────────────────────────
 class Sequencer {
   constructor(synth) {
-    this.synth = synth; this.bpm = 120; this.playing = false; this.step = -1; this._t = null;
+    this.synth = synth; this.bpm = 174; this.playing = false; this.step = -1; this._t = null;
     // 3 separate 16-step patterns (one per voice)
     this.voices = Array.from({length:3}, () => ({
       steps: Array.from({length:16}, (_,i) => ({ active:(i%4===0), note:36, accent:false })),

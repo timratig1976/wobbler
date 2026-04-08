@@ -62,9 +62,9 @@ function buildVoicePanel(col, voice, color, bpmGet, oscMode, centerCol) {
 
   // ── Filter layout: top row = type btns | bottom row = knobs left + curve right ──
 
-  // Row 1: filter type buttons (full width, compact)
+  // Row 1: filter type buttons + engine toggle (full width, compact)
   const fTypeRow = document.createElement('div');
-  fTypeRow.style.cssText = 'display:flex;gap:3px;margin-bottom:5px;justify-content:flex-start';
+  fTypeRow.style.cssText = 'display:flex;gap:3px;margin-bottom:5px;justify-content:flex-start;align-items:center';
   fS.appendChild(fTypeRow);
   const ftBtns = [];
   FILTER_TYPES.forEach((ft, idx) => {
@@ -80,6 +80,29 @@ function buildVoicePanel(col, voice, color, bpmGet, oscMode, centerCol) {
     });
     ftBtns.push(b); fTypeRow.appendChild(b);
   });
+
+  // Engine toggle: BIQUAD ↔ ZDF
+  const _engCurrent = () => p.filter.engine || 'biquad';
+  const engBtn = document.createElement('button');
+  engBtn.style.cssText = 'margin-left:auto;padding:3px 7px;font-size:9px;letter-spacing:1px;border:1px solid #2a2a44;background:transparent;color:#555;border-radius:3px;font-family:monospace;cursor:pointer;white-space:nowrap';
+  const _updateEngBtn = () => {
+    const isZdf = _engCurrent() === 'zdf';
+    engBtn.textContent = isZdf ? 'ZDF' : 'BIQ';
+    engBtn.style.borderColor = isZdf ? color : '#2a2a44';
+    engBtn.style.color = isZdf ? color : '#555';
+    engBtn.title = isZdf ? 'ZDF filter (character, wobble) — click for Biquad' : 'Biquad filter (clean, alias-free) — click for ZDF';
+  };
+  _updateEngBtn();
+  engBtn.addEventListener('click', () => {
+    const next = _engCurrent() === 'zdf' ? 'biquad' : 'zdf';
+    if (next === 'zdf' && !window._zdfWorkletReady) {
+      engBtn.textContent = 'WAIT…'; setTimeout(_updateEngBtn, 1000); return;
+    }
+    voice._switchFilterEngine(next);
+    _updateEngBtn();
+    if (typeof redrawFilterCurve === 'function') redrawFilterCurve();
+  });
+  fTypeRow.appendChild(engBtn);
 
   // Row 2: knobs (left, flex:1) + curve canvas (right, max 50%)
   const fInner = document.createElement('div');
@@ -115,7 +138,7 @@ function buildVoicePanel(col, voice, color, bpmGet, oscMode, centerCol) {
   fLeft.appendChild(fKnobRow);
 
   const cutKnob = makeKnob({ parent:fKnobRow, min:20,    max:18000, value:p.filter.cutoff,    label:'CUT', decimals:0, log:true, size:46, color, onChange: v => { voice.set('filter','cutoff',v);    updateFilterReadouts(); redrawFilterCurve(); } });
-  makeKnob({ parent:fKnobRow, min:0,     max:30,    value:p.filter.resonance, label:'RES', decimals:1,          size:46, color, onChange: v => { voice.set('filter','resonance',v); updateFilterReadouts(); redrawFilterCurve(); } });
+  const resKnob = makeKnob({ parent:fKnobRow, min:0.01,  max:30,    value:p.filter.resonance, label:'RES', decimals:1, size:46, color, onChange: v => { voice.set('filter','resonance',v); updateFilterReadouts(); redrawFilterCurve(); } });
   makeKnob({ parent:fKnobRow, min:0,     max:12000, value:p.filter.envAmount, label:'ENV', decimals:0,          size:46, color, onChange: v => { voice.set('filter','envAmount',v); redrawFilterCurve(); } });
   makeKnob({ parent:fKnobRow, min:0,     max:1,     value:p.filter.mix,       label:'MIX', decimals:2,          size:46, color, onChange: v => voice.set('filter','mix',v) });
 
@@ -134,12 +157,12 @@ function buildVoicePanel(col, voice, color, bpmGet, oscMode, centerCol) {
   fRight.appendChild(freqLbls);
 
   // Ensure filter node matches p params before drawing
-  voice.filter.type = p.filter.type;
-  voice.filter.frequency.value = p.filter.cutoff;
-  voice.filter.Q.value = p.filter.resonance;
+  voice._filterSetType(p.filter.type);
+  voice._filterSetCutoff(p.filter.cutoff, voice.ctx.currentTime);
+  voice._filterSetResonance(p.filter.resonance, voice.ctx.currentTime);
   function redrawFilterCurve() {
     curveCvs.width = curveCvs.offsetWidth || curveCvs.parentElement?.offsetWidth || 200;
-    drawFilterCurve(curveCvs, voice.filter, color, p.filter.envAmount, null, voice.analyser, voice.preAnalyser, null);
+    drawFilterCurve(curveCvs, voice.filter, color, p.filter.envAmount, null, voice.analyser, voice.preAnalyser, null, p.filter.cutoff, p.filter.resonance, p.filter.type);
   }
   setTimeout(redrawFilterCurve, 60);
 
@@ -158,60 +181,20 @@ function buildVoicePanel(col, voice, color, bpmGet, oscMode, centerCol) {
   function estimateModCutoff() {
     if (!voice._playing || !voice._noteOnTime) return null;
     const elapsed = voice.ctx.currentTime - voice._noteOnTime;
-    const tw = p.twe;
     let mod = 0;
-    // TWE MAIN
-    if (!tw._bypassed && tw.main && tw.main._enabled !== false && tw.main.depth > 0
-        && (tw.main.target === 'cutoff' || tw.main.target === undefined)
-        && voice.tweMain.connected === 'cutoff') {
-      mod += waveY(tw.main.shape, elapsed * voice._tweCalcRate(tw.main)) * tw.main.depth;
-    }
-    // TWE BODY (nested under main)
-    const _twBody = tw.main?.body;
-    if (!tw._bypassed && _twBody && _twBody._enabled !== false && _twBody.depth > 0
-        && _twBody.target === 'cutoff' && voice.tweBody.connected === 'cutoff') {
-      mod += waveY(_twBody.shape, elapsed * voice._tweCalcRate(_twBody)) * _twBody.depth;
-    }
-    // LFOs targeting cutoff
     p.lfos.forEach((lp, i) => {
       if (lp.target !== 'cutoff' || lp.depth <= 0) return;
       const node = voice.lfoNodes[i];
       if (!node || !node.connected) return;
-      const phase = elapsed * lp.rate;
-      mod += waveY(lp.waveform, phase) * lp.depth;
+      mod += waveY(lp.waveform, elapsed * lp.rate) * lp.depth;
     });
     return mod !== 0 ? Math.max(20, Math.min(20000, p.filter.cutoff + mod)) : null;
   }
 
-  // Estimate total modulation on noiseAmt target (same waveY helper)
   function estimateModNoiseAmt() {
     if (!voice._playing || !voice._noteOnTime) return null;
     const elapsed = voice.ctx.currentTime - voice._noteOnTime;
-    const tw = p.twe;
     let mod = 0;
-    if (tw._bypassed) return null;
-    const scaledD = (sp) => (sp.target === 'volume' || sp.target === 'noiseAmt')
-      ? Math.min(sp.depth / 15000, 1.0) : sp.depth;
-    // TWE MAIN
-    if (tw.main && tw.main._enabled !== false && tw.main.depth > 0
-        && tw.main.target === 'noiseAmt' && voice.tweMain.connected === 'noiseAmt') {
-      mod += waveY(tw.main.shape, elapsed * voice._tweCalcRate(tw.main)) * scaledD(tw.main);
-    }
-    // TWE BODY
-    const _twBody = tw.main?.body;
-    if (_twBody && _twBody._enabled !== false && _twBody.depth > 0
-        && _twBody.target === 'noiseAmt' && voice.tweBody.connected === 'noiseAmt') {
-      mod += waveY(_twBody.shape, elapsed * voice._tweCalcRate(_twBody)) * scaledD(_twBody);
-    }
-    // AUX lanes
-    (tw.aux || []).forEach((als, i) => {
-      const a = voice._tweAuxOscs[i];
-      if (!a || !a.connected) return;
-      if (als._enabled !== false && als.depth > 0 && als.target === 'noiseAmt') {
-        mod += waveY(als.shape, elapsed * voice._tweCalcRate(als)) * scaledD(als);
-      }
-    });
-    // LFOs targeting noiseAmt
     p.lfos.forEach((lp, i) => {
       if (lp.target !== 'noiseAmt' || lp.depth <= 0) return;
       const node = voice.lfoNodes[i];
@@ -234,11 +217,8 @@ function buildVoicePanel(col, voice, color, bpmGet, oscMode, centerCol) {
     if (ts - _lastModDrawTime >= 50) { // ~20fps cap
       _lastModDrawTime = ts;
       const mc = estimateModCutoff();
-      // Sync filter node params
-      voice.filter.frequency.value = p.filter.cutoff;
-      voice.filter.Q.value = p.filter.resonance;
       // Build lfoState from LFO engine slot targeting cutoff
-      const _lfoSlot = voice.lfoEngine?.slots?.find(s => s.target === 'cutoff' && s._enabled !== false && s.depth > 0);
+      const _lfoSlot = voice.lfoEngine?.slots?.find(s => s.target === 'cutoff' && s.enabled && s.depth > 0);
       const _lfoActive = !!(_lfoSlot && _isAudible());
       const _lfoPhase = _lfoSlot ? (_lfoSlot.phase || 0) : 0;
       const _lfoState = _lfoSlot ? {
@@ -262,7 +242,7 @@ function buildVoicePanel(col, voice, color, bpmGet, oscMode, centerCol) {
       drawFilterCurve(curveCvs, voice.filter, color, p.filter.envAmount, mc,
         hasFFT ? voice.analyser : null,
         hasFFT ? voice.preAnalyser : null,
-        _lfoState);
+        _lfoState, p.filter.cutoff, p.filter.resonance, p.filter.type);
       // Update modulation ring on CUT knob only when mod value changes
       const changed = mc === null
         ? _lastModCutoff !== null
@@ -271,12 +251,134 @@ function buildVoicePanel(col, voice, color, bpmGet, oscMode, centerCol) {
         _lastModCutoff = mc;
         cutKnob.setModValue(mc !== null ? mc : null);
       }
+      // Mod range arc on CUT knob (Serum-style)
+      const _cutSlot = voice.lfoEngine?.slots?.find(s => s.enabled && s.target === 'cutoff');
+      if (_cutSlot) {
+        cutKnob.setModRange(
+          _cutSlot.modMin ?? 0, _cutSlot.modMax ?? 1,
+          color,
+          (lo, hi) => { _cutSlot.modMin = lo; _cutSlot.modMax = hi; }
+        );
+      } else {
+        cutKnob.clearModRange();
+      }
+      // Mod range arc on RES knob
+      const _resSlot = voice.lfoEngine?.slots?.find(s => s.enabled && s.target === 'resonance');
+      if (_resSlot) {
+        resKnob.setModRange(
+          _resSlot.modMin ?? 0, _resSlot.modMax ?? 1,
+          '#a78bfa',
+          (lo, hi) => { _resSlot.modMin = lo; _resSlot.modMax = hi; }
+        );
+      } else {
+        resKnob.clearModRange();
+      }
       // Noise knob ring
       const mn = estimateModNoiseAmt();
       const nChanged = mn !== _lastModNoise && (mn === null || _lastModNoise === null || Math.abs(mn - _lastModNoise) > 0.005);
       if (nChanged) {
         _lastModNoise = mn;
         voice._noiseKnob?.setModValue(mn);
+      }
+      // Mod rings for other LFO targets — read live slot value
+      if (voice.lfoEngine) {
+        const _getLiveVal = tgt => {
+          const s = voice.lfoEngine.slots.find(sl => sl.enabled && sl.target === tgt && sl.depth > 0);
+          if (!s || !s.points) return null;
+          const idx = Math.min(s.points.length - 1, Math.max(0, Math.round(s.phase * s.points.length)));
+          return s.points[idx] ?? null;
+        };
+        // RES knob
+        const rv = _getLiveVal('resonance');
+        if (rv !== null) {
+          const rq = p.filter.resonance * (1 + rv * (voice.lfoEngine.slots.find(sl=>sl.enabled&&sl.target==='resonance')?.depth||0) * 3);
+          resKnob.setModValue(Math.max(0.01, Math.min(30, rq)));
+        } else { resKnob.setModValue(null); }
+        // PITCH / SEMI / FINE — update glowing badge on FIN drag-param
+        const pv = _getLiveVal('pitch');
+        const sv = _getLiveVal('semi');
+        const fv = _getLiveVal('fine');
+        if (pv !== null) {
+          const pSlot = voice.lfoEngine.slots.find(sl=>sl.enabled&&sl.target==='pitch');
+          voice._pitchModUpdate?.((pv - 0.5) * 2 * (pSlot?.depth||0) * 100);
+        } else if (sv !== null) {
+          const sSlot = voice.lfoEngine.slots.find(sl=>sl.enabled&&sl.target==='semi');
+          const sc = Math.round((sv - 0.5) * 2 * (sSlot?.depth||0) * 12) * 100;
+          voice._pitchModUpdate?.(sc);
+          voice._semiModUpdate?.(Math.round(sc / 100));
+        } else if (fv !== null) {
+          const fSlot = voice.lfoEngine.slots.find(sl=>sl.enabled&&sl.target==='fine');
+          voice._pitchModUpdate?.((fv - 0.5) * 2 * (fSlot?.depth||0) * 100);
+        } else { voice._pitchModUpdate?.(null); voice._semiModUpdate?.(null); }
+        // SEM param range bar
+        const _semiSlot = voice.lfoEngine.slots.find(sl=>sl.enabled&&sl.target==='semi');
+        if (_semiSlot) {
+          voice._semParam?.setModRange(_semiSlot.modMin??0, _semiSlot.modMax??1, '#88ccff',
+            (lo,hi) => { _semiSlot.modMin=lo; _semiSlot.modMax=hi; });
+        } else { voice._semParam?.clearModRange(); }
+        // FIN param range bar (also covers pitch target)
+        const _fineSlot = voice.lfoEngine.slots.find(sl=>sl.enabled&&(sl.target==='fine'||sl.target==='pitch'));
+        if (_fineSlot) {
+          voice._finParam?.setModRange(_fineSlot.modMin??0, _fineSlot.modMax??1, '#88aaff',
+            (lo,hi) => { _fineSlot.modMin=lo; _fineSlot.modMax=hi; });
+        } else { voice._finParam?.clearModRange(); }
+        // TREMOLO — show gain % on LEVEL badge + range bar
+        const tv = _getLiveVal('amp');
+        const _ampSlot = voice.lfoEngine.slots.find(sl=>sl.enabled&&sl.target==='amp');
+        if (tv !== null && _ampSlot) {
+          const trem = (_ampSlot.modMin??0) + tv * ((_ampSlot.modMax??1) - (_ampSlot.modMin??0));
+          voice._tremoloModUpdate?.(Math.max(0, trem));
+          voice._levelParam?.setModRange(_ampSlot.modMin??0, _ampSlot.modMax??1, color,
+            (lo,hi) => { _ampSlot.modMin=lo; _ampSlot.modMax=hi; });
+        } else {
+          voice._tremoloModUpdate?.(null);
+          if (!_ampSlot) voice._levelParam?.clearModRange();
+        }
+        // DRIVE
+        const dv = _getLiveVal('drive');
+        const _driveSlot = voice.lfoEngine.slots.find(sl=>sl.enabled&&sl.target==='drive');
+        if (dv !== null && _driveSlot) {
+          const ranged = (_driveSlot.modMin??0) + dv * ((_driveSlot.modMax??1) - (_driveSlot.modMin??0));
+          voice._driveKnob?.setModValue(Math.max(0, Math.min(1, ranged)));
+          voice._driveKnob?.setModRange(
+            _driveSlot.modMin??0, _driveSlot.modMax??1,
+            '#fb923c',
+            (lo, hi) => { _driveSlot.modMin = lo; _driveSlot.modMax = hi; }
+          );
+        } else {
+          voice._driveKnob?.setModValue(null);
+          if (!_driveSlot) voice._driveKnob?.clearModRange();
+        }
+        // DIST MIX
+        const dmv = _getLiveVal('distMix');
+        const _distMixSlot = voice.lfoEngine.slots.find(sl=>sl.enabled&&sl.target==='distMix');
+        if (dmv !== null && _distMixSlot) {
+          const ranged = (_distMixSlot.modMin??0) + dmv * ((_distMixSlot.modMax??1) - (_distMixSlot.modMin??0));
+          voice._distMixKnob?.setModValue(Math.max(0, Math.min(1, ranged)));
+          voice._distMixKnob?.setModRange(
+            _distMixSlot.modMin??0, _distMixSlot.modMax??1,
+            '#f472b6',
+            (lo, hi) => { _distMixSlot.modMin = lo; _distMixSlot.modMax = hi; }
+          );
+        } else {
+          voice._distMixKnob?.setModValue(null);
+          if (!_distMixSlot) voice._distMixKnob?.clearModRange();
+        }
+        // NOISE AMT
+        const nav = _getLiveVal('noiseAmt');
+        const _noiseAmtSlot = voice.lfoEngine.slots.find(sl=>sl.enabled&&sl.target==='noiseAmt');
+        if (nav !== null && _noiseAmtSlot) {
+          const ranged = (_noiseAmtSlot.modMin??0) + nav * ((_noiseAmtSlot.modMax??1) - (_noiseAmtSlot.modMin??0));
+          voice._noiseKnob?.setModValue(Math.max(0, Math.min(1, ranged)));
+          voice._noiseKnob?.setModRange(
+            _noiseAmtSlot.modMin??0, _noiseAmtSlot.modMax??1,
+            '#34d399',
+            (lo, hi) => { _noiseAmtSlot.modMin = lo; _noiseAmtSlot.modMax = hi; }
+          );
+        } else {
+          voice._noiseKnob?.setModValue(null);
+          if (!_noiseAmtSlot) voice._noiseKnob?.clearModRange();
+        }
       }
     }
     _modRafId = requestAnimationFrame(modAnimLoop);
@@ -300,7 +402,15 @@ function buildVoicePanel(col, voice, color, bpmGet, oscMode, centerCol) {
             _lastModCutoff = null; _lastModNoise = null;
             _lastDrawKey = null;
             cutKnob.clearModValue();
+            resKnob.clearModValue();
             voice._noiseKnob?.clearModValue();
+            voice._driveKnob?.clearModValue();
+            voice._distMixKnob?.clearModValue();
+            voice._semParam?.setModLabel?.(null);
+            voice._finParam?.setModLabel?.(null);
+            voice._levelParam?.setModLabel?.(null);
+            voice._pitchModUpdate?.(null);
+            voice._tremoloModUpdate?.(null);
           }
         }, relMs);
       }
@@ -313,17 +423,8 @@ function buildVoicePanel(col, voice, color, bpmGet, oscMode, centerCol) {
   addSectionToggle(fS,
     () => { // Disable: allpass + disconnect all modulation from filter params
       voice.p.filter.bypassed = true;
-      voice.filter.type = 'allpass';
+      voice._filterSetType('allpass');
       voice._filterBypassed = true;
-      // Disconnect TWE MAIN/BODY if connected to cutoff or resonance
-      if (FILTER_MOD_TARGETS.includes(voice.tweMain.connected)) {
-        try { voice.tweMain.gain.disconnect(); } catch(_) {}
-        voice.tweMain.connected = null;
-      }
-      if (FILTER_MOD_TARGETS.includes(voice.tweBody.connected)) {
-        try { voice.tweBody.gain.disconnect(); } catch(_) {}
-        voice.tweBody.connected = null;
-      }
       // Disconnect LFOs targeting cutoff or resonance
       voice.lfoNodes.forEach((node, i) => {
         const tgt = p.lfos[i].target;
@@ -336,698 +437,205 @@ function buildVoicePanel(col, voice, color, bpmGet, oscMode, centerCol) {
     () => { // Enable: restore type, reconnect modulations
       voice.p.filter.bypassed = false;
       voice._filterBypassed = false;
-      voice.filter.type = p.filter.type;
-      // Reconnect LFOs targeting cutoff or resonance
+      voice._filterSetType(p.filter.type);
       voice.lfoNodes.forEach((_, i) => {
         if (FILTER_MOD_TARGETS.includes(p.lfos[i].target)) voice._connectLFO(i);
       });
-      // TWE MAIN/BODY will reconnect naturally on next noteOn
     },
     !voice.p.filter.bypassed
   );
+
+  // ── COMPRESSOR (pre-distortion) ────────────────────────────
+  const compS = sec('COMPRESSOR');
+  {
+    if (!p.comp) p.comp = { threshold:-24, knee:6, ratio:4, attack:0.003, release:0.1, bypassed:false };
+
+    const inner = document.createElement('div');
+    inner.style.cssText = 'display:flex;gap:6px;align-items:stretch';
+    compS.appendChild(inner);
+
+    // LEFT: knobs
+    const left = document.createElement('div');
+    left.style.cssText = 'flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;justify-content:center';
+    inner.appendChild(left);
+    const kr = document.createElement('div');
+    kr.style.cssText = 'display:flex;gap:2px;align-items:flex-end;flex-wrap:wrap';
+    left.appendChild(kr);
+    [
+      { key:'threshold', label:'THR',  min:-60, max:0,    value:p.comp.threshold, decimals:1 },
+      { key:'ratio',     label:'RATIO',min:1,   max:20,   value:p.comp.ratio,     decimals:1 },
+      { key:'knee',      label:'KNEE', min:0,   max:40,   value:p.comp.knee,      decimals:1 },
+      { key:'attack',    label:'ATK',  min:0,   max:0.5,  value:p.comp.attack,    decimals:3 },
+      { key:'release',   label:'REL',  min:0,   max:1,    value:p.comp.release,   decimals:3 },
+    ].forEach(cfg => makeKnob({ parent:kr, color, size:46, ...cfg, onChange: v => {
+      voice.set('comp', cfg.key, v);
+      _drawComp();
+    }}));
+
+    // RIGHT: canvas (transfer curve + GR meter)
+    const right = document.createElement('div');
+    right.style.cssText = 'flex:0 0 50%;max-width:50%;display:flex;flex-direction:column;gap:0';
+    inner.appendChild(right);
+
+    const compCvs = document.createElement('canvas');
+    compCvs.style.cssText = 'display:block;width:100%;height:100px;background:#06060f;border-radius:4px;border:1px solid #1a1a30;cursor:default';
+    right.appendChild(compCvs);
+
+    // Draw compressor transfer curve + GR bar
+    function _drawComp() {
+      const dpr = window.devicePixelRatio || 1;
+      const W = compCvs.offsetWidth || 120;
+      const TOTAL_H = 100;
+      const GR_H = 12;          // GR strip height at bottom
+      const H = TOTAL_H - GR_H; // curve area height
+      compCvs.width = W * dpr; compCvs.height = TOTAL_H * dpr;
+      const c = compCvs.getContext('2d');
+      c.setTransform(dpr, 0, 0, dpr, 0, 0);
+      c.fillStyle = '#07070f'; c.fillRect(0, 0, W, TOTAL_H);
+
+      const thr   = p.comp.threshold;  // dB, -60..0
+      const ratio = p.comp.ratio;      // 1..20
+      const knee  = p.comp.knee;       // dB
+
+      // Zoomed view: show ±WINDOW dB around threshold so knee is always large
+      const WINDOW = 24;
+      const IN_LO  = thr - WINDOW;
+      const IN_HI  = thr + WINDOW;
+      const OUT_LO = compOut(IN_LO, thr, ratio, knee);
+      const OUT_HI = compOut(IN_HI, thr, ratio, knee);
+      // keep output range at least WINDOW wide so 1:1 line isn't vertical
+      const OUT_SPAN = Math.max(WINDOW, OUT_HI - OUT_LO);
+      // Y maps OUT_LO..OUT_LO+OUT_SPAN → bottom..top of curve area
+      function toX(db) { return (db - IN_LO) / (IN_HI - IN_LO) * W; }
+      function toY(db) { return (1 - (db - OUT_LO) / OUT_SPAN) * H; }
+
+      // Transfer function: input dB → output dB
+      function compOut(xDb, th, rat, kn) {
+        const hk = kn / 2;
+        if (xDb <= th - hk) return xDb;
+        if (xDb >= th + hk || kn < 0.001) return th + (xDb - th) / rat;
+        const t = (xDb - th + hk) / kn;
+        const slope = 1 + (1 / rat - 1) * t;
+        return xDb + (slope - 1) * (xDb - (th - hk));
+      }
+
+      // ── Curve background ─────────────────────────────────
+      c.fillStyle = '#07070f'; c.fillRect(0, 0, W, H);
+
+      // Grid — dB lines at threshold and ±WINDOW/2
+      c.strokeStyle = 'rgba(255,255,255,0.05)'; c.lineWidth = 0.5;
+      [-WINDOW, -WINDOW/2, 0, WINDOW/2, WINDOW].forEach(off => {
+        const xdb = thr + off;
+        const xp = toX(xdb);
+        c.beginPath(); c.moveTo(xp, 0); c.lineTo(xp, H); c.stroke();
+      });
+      [0.25, 0.5, 0.75].forEach(f => {
+        c.beginPath(); c.moveTo(0, f*H); c.lineTo(W, f*H); c.stroke();
+      });
+
+      // Identity reference line (1:1) in zoomed coords
+      c.strokeStyle = 'rgba(255,255,255,0.12)'; c.lineWidth = 0.8;
+      c.setLineDash([3,3]);
+      c.beginPath();
+      c.moveTo(toX(IN_LO), toY(IN_LO));
+      c.lineTo(toX(IN_HI), toY(IN_HI));
+      c.stroke(); c.setLineDash([]);
+
+      // Threshold vertical line
+      const thrPx = toX(thr);
+      c.strokeStyle = `${color}55`; c.lineWidth = 0.8;
+      c.setLineDash([2,3]);
+      c.beginPath(); c.moveTo(thrPx, 0); c.lineTo(thrPx, H); c.stroke();
+      c.setLineDash([]);
+
+      // ── Transfer curve ──────────────────────────────────
+      function plotCurve(alpha, lw, blur) {
+        c.save(); c.globalAlpha = alpha;
+        c.strokeStyle = color; c.shadowColor = color;
+        c.shadowBlur = blur; c.lineWidth = lw; c.lineJoin = 'round';
+        c.beginPath();
+        const STEPS = W * 2;
+        for (let i = 0; i <= STEPS; i++) {
+          const xDb = IN_LO + (i / STEPS) * (IN_HI - IN_LO);
+          const yDb = compOut(xDb, thr, ratio, knee);
+          const px = toX(xDb), py = toY(yDb);
+          i === 0 ? c.moveTo(px, py) : c.lineTo(px, py);
+        }
+        c.stroke(); c.restore();
+      }
+      plotCurve(0.25, 4, 10);
+      plotCurve(1.0,  1.8, 3);
+
+      // ── Axis labels ─────────────────────────────────────
+      c.fillStyle = 'rgba(255,255,255,0.25)'; c.font = '6px monospace';
+      c.fillText(`${thr}dB`, thrPx + 2, H - 2);  // threshold label at bottom
+      c.fillStyle = 'rgba(255,255,255,0.15)'; c.font = '6px monospace';
+      c.fillText('IN →', W - 18, H - 2);
+      c.save(); c.translate(5, H * 0.55); c.rotate(-Math.PI/2);
+      c.fillText('OUT', 0, 0); c.restore();
+
+      // ── Divider between curve and GR strip ──────────────
+      c.strokeStyle = 'rgba(255,255,255,0.06)'; c.lineWidth = 0.5;
+      c.beginPath(); c.moveTo(0, H); c.lineTo(W, H); c.stroke();
+
+      // ── GR meter strip ───────────────────────────────────
+      const gr = Math.abs(voice._voiceComp?.reduction ?? 0);
+      const grY = H + 2;
+      const grBarH = GR_H - 4;
+      // track background
+      c.fillStyle = 'rgba(255,255,255,0.04)';
+      c.fillRect(2, grY, W - 4, grBarH);
+      if (gr > 0.1) {
+        const grNorm = Math.min(1, gr / 30);
+        const barW = grNorm * (W - 4);
+        const r = Math.round(60 + grNorm * 195);
+        const g = Math.round(220 * (1 - grNorm * 0.85));
+        c.fillStyle = `rgb(${r},${g},80)`;
+        c.shadowColor = `rgb(${r},${g},80)`; c.shadowBlur = 4;
+        c.fillRect(2, grY, barW, grBarH);
+        c.shadowBlur = 0;
+        c.fillStyle = 'rgba(255,255,255,0.55)'; c.font = 'bold 7px monospace';
+        c.fillText(`GR -${gr.toFixed(1)}dB`, 4, grY + grBarH - 1);
+      } else {
+        c.fillStyle = 'rgba(255,255,255,0.2)'; c.font = '7px monospace';
+        c.fillText('GR —', 4, grY + grBarH - 1);
+      }
+    }
+
+    // Animate GR meter continuously while playing
+    let _grAnimId = null;
+    const _startGrAnim = () => {
+      if (_grAnimId) return;
+      const loop = () => { _drawComp(); _grAnimId = requestAnimationFrame(loop); };
+      _grAnimId = requestAnimationFrame(loop);
+    };
+    const _stopGrAnim = () => {
+      if (_grAnimId) { cancelAnimationFrame(_grAnimId); _grAnimId = null; }
+      _drawComp();
+    };
+
+    const _origNoteOnComp  = voice.noteOn.bind(voice);
+    const _origNoteOffComp = voice.noteOff.bind(voice);
+    voice.noteOn  = (...a) => { _origNoteOnComp(...a);  _startGrAnim(); };
+    voice.noteOff = (...a) => { _origNoteOffComp(...a); setTimeout(_stopGrAnim, 600); };
+
+    setTimeout(() => _drawComp(), 150);
+    if (typeof ResizeObserver !== 'undefined') {
+      new ResizeObserver(() => _drawComp()).observe(compCvs);
+    }
+
+    addSectionToggle(compS,
+      () => { p.comp.bypassed = true;  voice._voiceComp.ratio.setTargetAtTime(1,   voice.ctx.currentTime, 0.01); },
+      () => { p.comp.bypassed = false; voice._voiceComp.ratio.setTargetAtTime(p.comp.ratio, voice.ctx.currentTime, 0.01); },
+      !p.comp.bypassed
+    );
+  }
 
   // ── DISTORTION ────────────────────────────────────────────
   const distS = sec('DISTORTION');
   buildDistSection(distS, p.dist, voice, color);
 
-  // ── TWE — Temporal Wobble Engine ──────────────────────────
-  const tweS = cSec('WOBBLE ENGINE'); tweS.classList.add('twe-sec');
-
-  const TWE_SHAPES   = ['sine','sawtooth','square','triangle'];
-  const TWE_SHAPE_ABBR = {sine:'SIN',sawtooth:'SAW',square:'SQR',triangle:'TRI'};
-  const TWE_TARGETS  = ['cutoff','resonance','pitch','noiseAmt','pan','volume','chorus'];
-  const TWE_DIVS     = [1,2,4,8,16,32];
-
-  // ─ Preset bar ─
-  const presetBar = document.createElement('div'); presetBar.className = 'twe-preset-bar';
-  tweS.appendChild(presetBar);
-
-  // ─ applyWobblePattern ─
-  function applyWobblePattern(pattern) {
-    if (pattern.main) {
-      const src = pattern.main, ms = p.twe.main;
-      ['rate','depth','target','shape','bpmSync','syncDiv','triplet','dotted'].forEach(k => { if (src[k] !== undefined) ms[k] = src[k]; });
-      if (src.strike) Object.assign(ms.strike, src.strike);
-      if (src.body)   Object.assign(ms.body,   src.body);
-      if (src.tail)   Object.assign(ms.tail,   src.tail);
-    }
-    voice.set('twe', 'main.shape',      p.twe.main.shape);
-    voice.set('twe', 'main.rate',       p.twe.main.rate);
-    voice.set('twe', 'main.body.shape', p.twe.main.body.shape);
-    voice.set('twe', 'main.body.rate',  p.twe.main.body.rate);
-    rebuildTweUI();
-  }
-
-  // ─ Preset bar buttons ─
-  Object.keys(WOBBLE_PRESETS).forEach(name => {
-    const btn = document.createElement('button'); btn.className = 'twe-preset-btn';
-    btn.textContent = name;
-    btn.addEventListener('click', () => { applyWobblePattern(WOBBLE_PRESETS[name]); showToast(`Pattern: ${name}`); });
-    presetBar.appendChild(btn);
-  });
-  const _sep = document.createElement('div'); _sep.className = 'twe-preset-sep'; presetBar.appendChild(_sep);
-  const randBtn = document.createElement('button'); randBtn.className = 'twe-preset-btn twe-preset-random'; randBtn.textContent = '🎲 RANDOM';
-  randBtn.addEventListener('click', () => { applyWobblePattern(randomizeWobble()); showToast('Randomized wobble'); });
-  presetBar.appendChild(randBtn);
-  const aiBtn = document.createElement('button'); aiBtn.className = 'twe-preset-btn twe-preset-ai'; aiBtn.textContent = '✨ AI';
-  aiBtn.addEventListener('click', () => { applyWobblePattern(aiGenerateWobble()); showToast('AI-generated wobble'); });
-  presetBar.appendChild(aiBtn);
-
-  // ─ Timeline canvas + redrawTwe ─
-  const tweCvs = document.createElement('canvas'); tweCvs.className = 'twe-preview';
-  tweS.appendChild(tweCvs);
-  let _tweRafId = null;
-  let _tweSelectedLane = 'main'; // 'main'|'strike'|'body'|'tail'|'aux.0'..
-  const redrawTwe = () => {
-    if (_tweRafId) { cancelAnimationFrame(_tweRafId); _tweRafId = null; }
-    const tick = () => {
-      const bpm = voice._bpm || 120;
-      if (voice._playing && voice._noteOnTime != null) {
-        drawTwePreview(tweCvs, p.twe, color, voice.ctx.currentTime - voice._noteOnTime, _tweSelectedLane, bpm);
-        _tweRafId = requestAnimationFrame(tick);
-      } else {
-        drawTwePreview(tweCvs, p.twe, color, undefined, _tweSelectedLane, bpm);
-        _tweRafId = null;
-      }
-    };
-    requestAnimationFrame(tick);
-  };
-  (function poll() { if (!_tweRafId) redrawTwe(); setTimeout(poll, 200); })();
-
-  // ─ Chaos / Ratemod row ─
-  const tweHeader = document.createElement('div'); tweHeader.className = 'twe-header';
-  tweS.appendChild(tweHeader);
-  const chaosWrap = document.createElement('div'); chaosWrap.className = 'knob-row'; tweHeader.appendChild(chaosWrap);
-  makeKnob({ parent:chaosWrap, min:0, max:1, value:p.twe.chaos, label:'CHAOS', decimals:2, color, onChange: v => { voice.set('twe','chaos',v); redrawTwe(); } });
-  makeKnob({ parent:chaosWrap, min:0, max:1, value:p.twe.tweAmt??1, label:'AMT', decimals:2, color:'#ffdd88', onChange: v => { voice.set('twe','tweAmt',v); } });
-  makeKnob({ parent:chaosWrap, min:1, max:16, value:p.twe.barsTotal??4, label:'BARS', decimals:0, step:1, color:'#aaaaff', onChange: v => { p.twe.barsTotal=Math.round(v); voice.set('twe','barsTotal',Math.round(v)); redrawTwe(); } });
-  const rateModBtn = document.createElement('button'); rateModBtn.className = 'twe-ratemod-btn'; rateModBtn.textContent = 'RATE-MOD'; rateModBtn.title = 'STRIKE drives BODY rate';
-  rateModBtn.classList.toggle('active', p.twe.ratemod);
-  rateModBtn.addEventListener('click', () => { const v = !p.twe.ratemod; rateModBtn.classList.toggle('active',v); voice.set('twe','ratemod',v); });
-  tweHeader.appendChild(rateModBtn);
-
-  // ─ Pattern save/load bar ─
-  const patBar = document.createElement('div'); patBar.className = 'twe-pat-bar'; tweS.appendChild(patBar);
-  const patNameIn = document.createElement('input'); patNameIn.className = 'patch-name-input'; patNameIn.placeholder = 'wobble pattern…'; patNameIn.maxLength = 32; patBar.appendChild(patNameIn);
-  const patSaveBtn = document.createElement('button'); patSaveBtn.className = 'patch-btn patch-save'; patSaveBtn.textContent = 'SAVE'; patBar.appendChild(patSaveBtn);
-  const patSel = document.createElement('select'); patSel.className = 'patch-select twe-pat-sel'; patBar.appendChild(patSel);
-  const refreshPatSel = () => {
-    const pats = _getAllWobblePatterns(); patSel.innerHTML = '<option value="">── patterns ──</option>';
-    Object.keys(pats).sort().forEach(k => { const o = document.createElement('option'); o.value=k; o.textContent=k; patSel.appendChild(o); });
-  };
-  refreshPatSel();
-  const patLoadBtn = document.createElement('button'); patLoadBtn.className = 'patch-btn patch-load'; patLoadBtn.textContent = 'LOAD'; patBar.appendChild(patLoadBtn);
-  const patDelBtn  = document.createElement('button'); patDelBtn.className  = 'patch-btn patch-del';  patDelBtn.textContent  = 'DEL';  patBar.appendChild(patDelBtn);
-  patSaveBtn.addEventListener('click', () => { if (!patNameIn.value.trim()) { patNameIn.focus(); return; } if (saveWobblePattern(patNameIn.value, p.twe)) { refreshPatSel(); showToast(`Wobble saved: ${patNameIn.value}`); } });
-  patLoadBtn.addEventListener('click', () => {
-    const name = patSel.value; if (!name) return;
-    const pat = _getAllWobblePatterns()[name]; if (!pat) return;
-    Object.assign(p.twe, JSON.parse(JSON.stringify(pat.twe)));
-    voice.set('twe','chaos',p.twe.chaos); voice.set('twe','ratemod',p.twe.ratemod);
-    patNameIn.value = name; showToast(`Wobble loaded: ${name}`);
-    rebuildTweUI();
-  });
-  patDelBtn.addEventListener('click', () => { const n=patSel.value; if(!n) return; if(!confirm(`Delete "${n}"?`)) return; deleteWobblePattern(n); refreshPatSel(); showToast(`Deleted: ${n}`); });
-
-  // ─ Lanes container ─
-  const lanesContainer = document.createElement('div'); lanesContainer.className = 'twe-lanes'; tweS.appendChild(lanesContainer);
-
-  // ─ Draw curve helpers ─
-  let _drawContainer = null, _isDrawing = false;
-  const _genSamples = (shape, N) => {
-    const s = new Float32Array(N);
-    for (let i=0;i<N;i++) { const t=(i/N)*2*Math.PI; switch(shape) { case 'sine':s[i]=Math.sin(t);break; case 'sawtooth':s[i]=2*(i/N)-1;break; case 'square':s[i]=i<N/2?1:-1;break; case 'triangle':s[i]=1-Math.abs(4*i/N-2);break; default:s[i]=Math.sin(t); } }
-    return s;
-  };
-  // Extended curve generator — all shapes return Float32Array of N samples in [-1, 1]
-  const _genCurve = (name, N) => {
-    const s = new Float32Array(N);
-    const t = i => i / (N - 1); // 0..1
-    switch (name) {
-      case 'sine':      for(let i=0;i<N;i++) s[i]=Math.sin((i/N)*2*Math.PI); break;
-      case 'sawtooth':  for(let i=0;i<N;i++) s[i]=2*(i/N)-1; break;
-      case 'square':    for(let i=0;i<N;i++) s[i]=i<N/2?1:-1; break;
-      case 'triangle':  for(let i=0;i<N;i++) s[i]=1-Math.abs(4*i/N-2); break;
-      case 'rampup':    for(let i=0;i<N;i++) s[i]=t(i)*2-1; break;            // -1 → +1
-      case 'rampdown':  for(let i=0;i<N;i++) s[i]=1-t(i)*2; break;            // +1 → -1
-      case 'easein':    for(let i=0;i<N;i++) s[i]=t(i)*t(i)*t(i)*2-1; break; // cubic ease-in
-      case 'easeout':   for(let i=0;i<N;i++){const v=1-t(i);s[i]=1-v*v*v*2;}break; // cubic ease-out
-      case 'easeinout': for(let i=0;i<N;i++){const x=t(i);s[i]=(x<0.5?4*x*x*x:(1-(-2*x+2)**3/2))*2-1;}break;
-      case 'expup':     for(let i=0;i<N;i++) s[i]=(Math.exp(t(i)*3)-1)/(Math.exp(3)-1)*2-1; break;
-      case 'expdown':   for(let i=0;i<N;i++) s[i]=1-(Math.exp(t(i)*3)-1)/(Math.exp(3)-1)*2; break;
-      case 'halfsine':  for(let i=0;i<N;i++) s[i]=Math.sin((i/N)*Math.PI); break; // 0→1→0, positive only
-      case 'bounce': {
-        for(let i=0;i<N;i++){
-          const x=t(i), a=1-x;
-          s[i]=a<0.36364?1-7.5625*a*a:a<0.72727?1-(7.5625*(a-0.54545)*(a-0.54545)+0.75):a<0.9091?1-(7.5625*(a-0.81818)*(a-0.81818)+0.9375):1-(7.5625*(a-0.95455)*(a-0.95455)+0.984375);
-        }} break;
-      case 'pulse':     for(let i=0;i<N;i++) s[i]=i<N*0.12?1:i<N*0.2?-0.4:0; break; // sharp hit + dip
-      case 'stutter':   for(let i=0;i<N;i++) s[i]=Math.floor(i/(N/8))%2===0?1:-1; break; // 8 steps
-      case 'random':    for(let i=0;i<N;i++) s[i]=Math.random()*2-1; break;
-      default:          for(let i=0;i<N;i++) s[i]=Math.sin((i/N)*2*Math.PI);
-    }
-    return s;
-  };
-  // AI text→curve: parse natural language description
-  const _aiGenCurve = (text, N) => {
-    const q = text.toLowerCase().replace(/[^a-z0-9 ]/g,'');
-    const has = (...words) => words.some(w => q.includes(w));
-    if (has('bounce','spring','elastic')) return _genCurve('bounce', N);
-    if (has('pulse','hit','click','snap','attack')) return _genCurve('pulse', N);
-    if (has('stutter','step','gate','chop')) return _genCurve('stutter', N);
-    if (has('random','noise','chaos','glitch')) return _genCurve('random', N);
-    if (has('half sine','half sin','positive sine','rectif')) return _genCurve('halfsine', N);
-    if (has('ease in out','smooth','s curve','scurve','sigmoid')) return _genCurve('easeinout', N);
-    if (has('ease out','slow down','slowing','decelerat','brake')) return _genCurve('easeout', N);
-    if (has('ease in','slow start','accelerat','build up','buildup')) return _genCurve('easein', N);
-    if (has('exp','exponential','log','logarithm')) return has('down','fall','decay','drop') ? _genCurve('expdown', N) : _genCurve('expup', N);
-    if (has('ramp down','fall','descend','drop','decay','fade out')) return _genCurve('rampdown', N);
-    if (has('ramp up','rise','ascend','climb','fade in','grow')) return _genCurve('rampup', N);
-    if (has('saw')) return _genCurve('sawtooth', N);
-    if (has('square','rect')) return _genCurve('square', N);
-    if (has('tri','triangle')) return _genCurve('triangle', N);
-    if (has('sine','sin','smooth wave')) return _genCurve('sine', N);
-    // fallback: sine
-    return _genCurve('sine', N);
-  };
-
-  const openDrawCanvas = (sp, keyPrefix, shapeRow) => {
-    if (_drawContainer) { _drawContainer.remove(); _drawContainer = null; }
-    const wrap = document.createElement('div'); wrap.className = 'twe-draw-wrap'; _drawContainer = wrap;
-    const cvs = document.createElement('canvas'); cvs.width=512; cvs.height=120; cvs.className='twe-draw-canvas';
-    const N = 64;
-    const ds = new Float32Array(sp.customShape ? sp.customShape.slice(0,N) : _genCurve(sp.shape==='custom'?'sine':sp.shape, N));
-    const drawIt = () => {
-      const g=cvs.getContext('2d'); const W=cvs.width,H=cvs.height;
-      g.fillStyle='#04040e'; g.fillRect(0,0,W,H);
-      g.strokeStyle='#1a1a38'; g.lineWidth=1;
-      g.beginPath(); g.moveTo(0,H/2); g.lineTo(W,H/2); g.stroke();
-      for(let i=1;i<4;i++){g.beginPath();g.moveTo(i*W/4,0);g.lineTo(i*W/4,H);g.stroke();}
-      g.strokeStyle=color; g.lineWidth=2; g.beginPath();
-      for(let i=0;i<N;i++){const x=(i/N)*W,y=H/2-ds[i]*(H/2-6);i===0?g.moveTo(x,y):g.lineTo(x,y);}
-      g.stroke();
-    };
-    const setSamp = (e) => {
-      const r=cvs.getBoundingClientRect(); const cx=e.touches?e.touches[0].clientX:e.clientX,cy=e.touches?e.touches[0].clientY:e.clientY;
-      const xi=Math.min(N-1,Math.floor(Math.max(0,Math.min(1,(cx-r.left)/r.width))*N));
-      ds[xi]=-(Math.max(0,Math.min(1,(cy-r.top)/r.height))*2-1); drawIt();
-    };
-    cvs.addEventListener('mousedown', e=>{_isDrawing=true;setSamp(e);}); cvs.addEventListener('mousemove', e=>{if(_isDrawing)setSamp(e);}); cvs.addEventListener('mouseup',()=>_isDrawing=false); cvs.addEventListener('mouseleave',()=>_isDrawing=false);
-    drawIt();
-
-    // ── Preset row 1: standard + extended shapes ──
-    const presetsRow = document.createElement('div'); presetsRow.className='twe-draw-presets';
-    const CURVE_PRESETS = [
-      { key:'sine',     lbl:'SIN' }, { key:'sawtooth', lbl:'SAW' }, { key:'square',   lbl:'SQR' }, { key:'triangle', lbl:'TRI' },
-      { key:'rampup',   lbl:'↑'   }, { key:'rampdown', lbl:'↓'   }, { key:'easein',   lbl:'EI'  }, { key:'easeout',  lbl:'EO'  },
-      { key:'easeinout',lbl:'S~'  }, { key:'expup',    lbl:'EXP↑'}, { key:'expdown',  lbl:'EXP↓'}, { key:'halfsine', lbl:'½SIN'},
-      { key:'pulse',    lbl:'PLS' }, { key:'bounce',   lbl:'BNC' }, { key:'stutter',  lbl:'STP' }, { key:'random',   lbl:'RND' },
-    ];
-    CURVE_PRESETS.forEach(({key, lbl}) => {
-      const pb=document.createElement('button'); pb.textContent=lbl; pb.className='twe-draw-preset-btn';
-      pb.title=key; pb.addEventListener('click',()=>{ ds.set(_genCurve(key,N)); drawIt(); });
-      presetsRow.appendChild(pb);
-    });
-
-    // ── AI row ──
-    const aiRow = document.createElement('div'); aiRow.className='twe-draw-ai-row';
-    const aiIn = document.createElement('input'); aiIn.type='text'; aiIn.placeholder='Describe curve… e.g. "ramp up", "slow down", "bounce"'; aiIn.className='twe-draw-ai-input';
-    const aiBtn = document.createElement('button'); aiBtn.textContent='✨ Generate'; aiBtn.className='twe-draw-ai-btn';
-    aiBtn.addEventListener('click', () => {
-      const result = _aiGenCurve(aiIn.value || '', N);
-      ds.set(result); drawIt();
-    });
-    aiIn.addEventListener('keydown', e => { if(e.key==='Enter') aiBtn.click(); });
-    aiRow.append(aiIn, aiBtn);
-
-    // ── Action row: Apply | Reset | Close ──
-    const actRow = document.createElement('div'); actRow.className='twe-draw-btns';
-    const applyBtn = document.createElement('button'); applyBtn.className='twe-draw-apply'; applyBtn.textContent='Apply';
-    applyBtn.addEventListener('click', ()=>{
-      sp.customShape=Array.from(ds); sp.shape='custom';
-      voice.set('twe',`${keyPrefix}.shape`,'custom');
-      shapeRow.querySelectorAll('.wave-btn').forEach(b=>b.classList.remove('active'));
-      shapeRow.querySelector('.twe-draw-btn')?.classList.add('active');
-      wrap.remove(); _drawContainer=null; redrawTwe();
-    });
-    const resetBtn = document.createElement('button'); resetBtn.className='twe-draw-reset'; resetBtn.textContent='Delete Custom';
-    resetBtn.title='Clear custom shape and revert to Sine';
-    resetBtn.addEventListener('click', ()=>{
-      sp.customShape = null; sp.shape = 'sine';
-      voice.set('twe', `${keyPrefix}.shape`, 'sine');
-      shapeRow.querySelectorAll('.wave-btn').forEach(b=>b.classList.toggle('active', b.dataset.shape==='sine'));
-      shapeRow.querySelector('.twe-draw-btn')?.classList.remove('active');
-      wrap.remove(); _drawContainer=null; redrawTwe();
-    });
-    const closeBtn = document.createElement('button'); closeBtn.className='twe-draw-close'; closeBtn.textContent='✕';
-    closeBtn.addEventListener('click',()=>{wrap.remove();_drawContainer=null;});
-    actRow.append(applyBtn, resetBtn, closeBtn);
-
-    wrap.append(cvs, presetsRow, aiRow, actRow);
-    shapeRow.insertAdjacentElement('afterend', wrap);
-  };
-
-  // ─ UI helper: shape row ─
-  const buildShapeRow = (parent, sp, keyPrefix) => {
-    const row = document.createElement('div'); row.className='twe-shape-row';
-    TWE_SHAPES.forEach(sh => {
-      const b = document.createElement('button'); b.className='wave-btn'+(sh===sp.shape?' active':''); b.textContent=TWE_SHAPE_ABBR[sh]; b.dataset.shape=sh;
-      b.addEventListener('click', e => {
-        const s=e.target.closest('[data-shape]').dataset.shape;
-        row.querySelectorAll('.wave-btn').forEach(x=>x.classList.remove('active')); b.classList.add('active');
-        sp.shape=s; voice.set('twe',`${keyPrefix}.shape`,s); redrawTwe();
-      });
-      row.appendChild(b);
-    });
-    const drwBtn = document.createElement('button'); drwBtn.className='wave-btn twe-draw-btn'+(sp.shape==='custom'?' active':''); drwBtn.textContent='DRW'; drwBtn.title='Draw custom waveform';
-    drwBtn.addEventListener('click', ()=>openDrawCanvas(sp, keyPrefix, row));
-    row.appendChild(drwBtn);
-    parent.appendChild(row);
-    return row;
-  };
-
-  // ─ UI helper: target selector ─
-  const buildTargetSel = (parent, sp, keyPrefix) => {
-    const sel = document.createElement('select'); sel.className='twe-target-sel';
-    TWE_TARGETS.forEach(t=>{const o=document.createElement('option');o.value=t;o.textContent=t.toUpperCase();if(t===sp.target)o.selected=true;sel.appendChild(o);});
-    sel.addEventListener('change', ()=>{ sp.target=sel.value; voice.set('twe',`${keyPrefix}.target`,sel.value); redrawTwe(); });
-    parent.appendChild(sel); return sel;
-  };
-
-  // ─ UI helper: BPM sync row ─
-  const buildBpmRow = (parent, sp, keyPrefix) => {
-    const row = document.createElement('div'); row.className='twe-sync-row';
-    const bpmBtn = document.createElement('button'); bpmBtn.className='twe-mod-btn'+(sp.bpmSync?' active':''); bpmBtn.textContent='BPM';
-    const divSel = document.createElement('select'); divSel.className='twe-div-sel'; divSel.disabled=!sp.bpmSync;
-    TWE_DIVS.forEach(d=>{const o=document.createElement('option');o.value=d;o.textContent=`1/${d}`;if(d===sp.syncDiv)o.selected=true;divSel.appendChild(o);});
-    divSel.addEventListener('change',()=>{ sp.syncDiv=parseInt(divSel.value); voice.set('twe',`${keyPrefix}.syncDiv`,sp.syncDiv); redrawTwe(); });
-    bpmBtn.addEventListener('click',()=>{ sp.bpmSync=!sp.bpmSync; voice.set('twe',`${keyPrefix}.bpmSync`,sp.bpmSync); bpmBtn.classList.toggle('active',sp.bpmSync); divSel.disabled=!sp.bpmSync; redrawTwe(); });
-    const tripBtn = document.createElement('button'); tripBtn.className='twe-mod-btn'+(sp.triplet?' active':''); tripBtn.textContent='T';
-    const dotBtn  = document.createElement('button'); dotBtn.className ='twe-mod-btn'+(sp.dotted ?' active':''); dotBtn.textContent ='D';
-    tripBtn.addEventListener('click',()=>{ sp.triplet=!sp.triplet; if(sp.triplet){sp.dotted=false;dotBtn.classList.remove('active');} voice.set('twe',`${keyPrefix}.triplet`,sp.triplet); voice.set('twe',`${keyPrefix}.dotted`,sp.dotted); tripBtn.classList.toggle('active',sp.triplet); redrawTwe(); });
-    dotBtn.addEventListener ('click',()=>{ sp.dotted =!sp.dotted;  if(sp.dotted ){sp.triplet=false;tripBtn.classList.remove('active');} voice.set('twe',`${keyPrefix}.dotted`,sp.dotted);   voice.set('twe',`${keyPrefix}.triplet`,sp.triplet); dotBtn.classList.toggle('active',sp.dotted); redrawTwe(); });
-    row.append(bpmBtn, divSel, tripBtn, dotBtn); parent.appendChild(row);
-  };
-
-  // ─ UI helper: full lane controls ─
-  const buildLaneControls = (parent, sp, keyPrefix, _unused, compact) => {
-    buildShapeRow(parent, sp, keyPrefix);
-    const ctrlRow = document.createElement('div'); ctrlRow.className='twe-ctrl-row';
-    buildTargetSel(ctrlRow, sp, keyPrefix);
-    makeKnob({ parent:ctrlRow, min:0.01, max:20,   value:sp.rate,         label:'RATE',   decimals:2, color, onChange:v=>{ sp.rate=v;  voice.set('twe',`${keyPrefix}.rate`,v);  redrawTwe(); }});
-    makeKnob({ parent:ctrlRow, min:0,    max:15000, value:sp.depth,        label:'DEPTH',  decimals:0, color, onChange:v=>{ sp.depth=v; voice.set('twe',`${keyPrefix}.depth`,v); redrawTwe(); }});
-    makeKnob({ parent:ctrlRow, min:0,    max:4,     value:sp.attack??0,    label:'ATK',    unit:'s', decimals:2, color:'#88ddff', onChange:v=>{ sp.attack=v; voice.set('twe',`${keyPrefix}.attack`,v); redrawTwe(); }});
-    makeKnob({ parent:ctrlRow, min:0,    max:4,     value:sp.decay??0,     label:'DCY',    unit:'s', decimals:2, color:'#ffaa66', onChange:v=>{ sp.decay=v;  voice.set('twe',`${keyPrefix}.decay`,v);  redrawTwe(); }});
-    if ('startBar' in sp) makeKnob({ parent:ctrlRow, min:0, max:(voice.p.twe.barsTotal||4)-1, value:sp.startBar??0, label:'BAR', decimals:0, step:1, color:'#aaaaff', onChange:v=>{ sp.startBar=Math.round(v); voice.set('twe',`${keyPrefix}.startBar`,Math.round(v)); redrawTwe(); }});
-    parent.appendChild(ctrlRow);
-    if (!compact) buildBpmRow(parent, sp, keyPrefix);
-  };
-
-  // Helper: mark a lane block as selected
-  const selectLane = (id, block) => {
-    _tweSelectedLane = id;
-    lanesContainer.querySelectorAll('.twe-main-block,.twe-sub-block,.twe-aux-block').forEach(b=>b.classList.remove('twe-selected'));
-    block.classList.add('twe-selected');
-    redrawTwe();
-  };
-
-  // ─ Build main wobble section ─
-  const buildMainSection = () => {
-    const ms = p.twe.main;
-    const mainBlock = document.createElement('div'); mainBlock.className='twe-main-block'+((_tweSelectedLane==='main')?' twe-selected':'');
-    const hdr = document.createElement('div'); hdr.className='twe-block-hdr'; hdr.style.cursor='pointer';
-    const enBtn = document.createElement('button'); enBtn.className='twe-lane-toggle'+(ms._enabled!==false?' active':''); enBtn.textContent=ms._enabled!==false?'ON':'OFF';
-    const coreDiv = document.createElement('div'); coreDiv.className='twe-core-controls';
-    const updateMain = () => { const on=ms._enabled!==false; enBtn.classList.toggle('active',on); enBtn.textContent=on?'ON':'OFF'; coreDiv.style.opacity=on?'':'0.4'; if(!on){try{voice.tweMain.gain.disconnect();}catch(_){}voice.tweMain.connected=null;} };
-    enBtn.addEventListener('click', e=>{ e.stopPropagation(); ms._enabled=ms._enabled===false?true:false; updateMain(); redrawTwe(); });
-    hdr.addEventListener('click', e=>{ if(e.target===enBtn) return; selectLane('main', mainBlock); });
-    const lbl = document.createElement('span'); lbl.className='twe-block-lbl'; lbl.textContent='MAIN WOBBLE'; lbl.style.color=color;
-    const expandBtn = document.createElement('button'); expandBtn.className='twe-expand-btn'; expandBtn.textContent='▼ STRIKE · BODY · TAIL';
-    expandBtn.addEventListener('click', e=>{ e.stopPropagation(); const c=subDiv.style.display==='none'; subDiv.style.display=c?'':'none'; expandBtn.textContent=c?'▼ STRIKE · BODY · TAIL':'▶ STRIKE · BODY · TAIL'; });
-    hdr.append(lbl, expandBtn, enBtn); mainBlock.appendChild(hdr);
-    buildLaneControls(coreDiv, ms, 'main', false, false); mainBlock.appendChild(coreDiv);
-
-    const subDiv = document.createElement('div'); subDiv.className='twe-sub-components';
-    [{key:'strike',label:'⚡ STRIKE'},{key:'body',label:'▬ BODY'},{key:'tail',label:'∿ TAIL'}].forEach(({key,label})=>{
-      const sub=ms[key];
-      const subBlock=document.createElement('div'); subBlock.className='twe-sub-block'+((_tweSelectedLane===key)?' twe-selected':'');
-      const subHdr=document.createElement('div'); subHdr.className='twe-sub-hdr'; subHdr.style.cursor='pointer';
-      const subEn=document.createElement('button'); subEn.className='twe-lane-toggle'+(sub._enabled!==false?' active':''); subEn.textContent=sub._enabled!==false?'ON':'OFF';
-      const subControls=document.createElement('div'); subControls.className='twe-sub-controls';
-      const updateSub=()=>{ const on=sub._enabled!==false; subEn.classList.toggle('active',on); subEn.textContent=on?'ON':'OFF'; subControls.style.opacity=on?'':'0.4'; if(key==='body'&&!on){try{voice.tweBody.gain.disconnect();}catch(_){}voice.tweBody.connected=null;} };
-      subEn.addEventListener('click', e=>{ e.stopPropagation(); sub._enabled=sub._enabled===false?true:false; updateSub(); redrawTwe(); });
-      subHdr.addEventListener('click', e=>{ if(e.target===subEn) return; selectLane(key, subBlock); });
-      const subLbl=document.createElement('span'); subLbl.className='twe-sub-lbl'; subLbl.textContent=label;
-      subHdr.append(subLbl, subEn); subBlock.appendChild(subHdr);
-      buildLaneControls(subControls, sub, `main.${key}`, true, false); subBlock.appendChild(subControls);
-      updateSub(); subDiv.appendChild(subBlock);
-    });
-    mainBlock.appendChild(subDiv); updateMain(); lanesContainer.appendChild(mainBlock);
-  };
-
-  // ─ Build aux lane ─
-  const buildAuxLane = (i) => {
-    const als = p.twe.aux[i]; if(!als) return;
-    const auxId = `aux.${i}`;
-    const auxBlock=document.createElement('div'); auxBlock.className='twe-aux-block'+(_tweSelectedLane===auxId?' twe-selected':''); auxBlock.dataset.auxIndex=i;
-    const hdr=document.createElement('div'); hdr.className='twe-block-hdr'; hdr.style.cursor='pointer';
-    const enBtn=document.createElement('button'); enBtn.className='twe-lane-toggle'+(als._enabled!==false?' active':''); enBtn.textContent=als._enabled!==false?'ON':'OFF';
-    const auxControls=document.createElement('div'); auxControls.className='twe-aux-controls';
-    const updateAux=()=>{ const on=als._enabled!==false; enBtn.classList.toggle('active',on); enBtn.textContent=on?'ON':'OFF'; auxControls.style.opacity=on?'':'0.4'; if(!on){const a=voice._tweAuxOscs[i];if(a){try{a.gain.disconnect();}catch(_){}a.connected=null;}} };
-    enBtn.addEventListener('click', e=>{ e.stopPropagation(); als._enabled=als._enabled===false?true:false; updateAux(); redrawTwe(); });
-    hdr.addEventListener('click', e=>{ if(e.target===enBtn||e.target===removeBtn) return; selectLane(auxId, auxBlock); });
-    const lbl=document.createElement('span'); lbl.className='twe-block-lbl'; lbl.textContent=`AUX ${i+1}`;
-    const removeBtn=document.createElement('button'); removeBtn.className='twe-remove-btn'; removeBtn.textContent='✕';
-    removeBtn.addEventListener('click', e=>{ e.stopPropagation();
-      voice.set('twe',`aux.remove.${i}`,null); auxBlock.remove();
-      lanesContainer.querySelectorAll('.twe-aux-block').forEach(b=>b.remove());
-      p.twe.aux.forEach((_,j)=>buildAuxLane(j)); redrawTwe();
-    });
-    hdr.append(lbl, removeBtn, enBtn); auxBlock.appendChild(hdr);
-    buildLaneControls(auxControls, als, `aux.${i}`, true, false); auxBlock.appendChild(auxControls);
-    updateAux();
-    const addBtn=lanesContainer.querySelector('.twe-add-aux-btn');
-    if(addBtn) lanesContainer.insertBefore(auxBlock,addBtn); else lanesContainer.appendChild(auxBlock);
-  };
-
-  // ─ Rebuild entire lanes UI ─
-  const rebuildTweUI = () => {
-    lanesContainer.innerHTML='';
-    buildMainSection();
-    const addAuxBtn=document.createElement('button'); addAuxBtn.className='twe-add-aux-btn'; addAuxBtn.textContent='＋ ADD AUX LANE';
-    addAuxBtn.addEventListener('click',()=>{ voice.set('twe','aux.add',null); buildAuxLane(p.twe.aux.length-1); redrawTwe(); });
-    lanesContainer.appendChild(addAuxBtn);
-    p.twe.aux.forEach((_,i)=>buildAuxLane(i));
-    redrawTwe();
-  };
-  rebuildTweUI();
-
-  // TWE bypass toggle
-  addSectionToggle(tweS,
-    () => {
-      p.twe._bypassed = true; voice.p.twe._bypassed = true;
-      const t = voice.ctx.currentTime;
-      voice.tweMain.gain.gain.setTargetAtTime(0,t,0.005); try{voice.tweMain.gain.disconnect();}catch(_){} voice.tweMain.connected=null;
-      voice.tweBody.gain.gain.setTargetAtTime(0,t,0.005); try{voice.tweBody.gain.disconnect();}catch(_){} voice.tweBody.connected=null;
-      if(voice._tweStrikeGain){voice._tweStrikeGain.gain.setTargetAtTime(0,t,0.005);try{voice._tweStrikeGain.disconnect();}catch(_){}}
-      if(voice._tweStrikeOsc){try{voice._tweStrikeOsc.stop(t+0.05);}catch(_){}}
-      if(voice._tweTailOsc){try{voice._tweTailOsc.stop(t+0.05);}catch(_){}}
-      voice._tweAuxOscs.forEach(a=>{a.gain.gain.setTargetAtTime(0,t,0.005);try{a.gain.disconnect();}catch(_){}a.connected=null;});
-    },
-    () => { p.twe._bypassed = false; voice.p.twe._bypassed = false; },
-    !p.twe._bypassed
-  );
-
-  // Initial draw
-  setTimeout(() => redrawTwe(), 50);
-
-  // ── WOBBLE ENGINE (LFO drawable breakpoint canvas) ────────
-  const lS = cSec('LFO ENGINE'); lS.classList.add('lfo-sec');
-
-  // Slot selector (LFO 1–5 tabs)
-  const slotTabRow = document.createElement('div'); slotTabRow.className = 'btn-row'; slotTabRow.style.cssText = 'margin-bottom:8px;gap:3px';
-  let activeSlot = 0;
-  const slotTabs = [];
-
-  // We'll build one canvas area and swap on slot change
-  const canvasWrap = document.createElement('div'); canvasWrap.style.cssText = 'position:relative;margin-bottom:6px';
-  const bpCanvas = document.createElement('canvas');
-  bpCanvas.style.cssText = 'display:block;width:100%;height:130px;border-radius:4px;background:#050510;border:1px solid #1e1e3a;cursor:crosshair;touch-action:none';
-  canvasWrap.appendChild(bpCanvas);
-  const axisTop = document.createElement('div'); axisTop.style.cssText = 'position:absolute;top:3px;left:4px;font-size:10px;color:#444;pointer-events:none'; axisTop.textContent = '1.0';
-  const axisBot = document.createElement('div'); axisBot.style.cssText = 'position:absolute;bottom:3px;left:4px;font-size:10px;color:#444;pointer-events:none'; axisBot.textContent = '0.0';
-  canvasWrap.append(axisTop, axisBot);
-
-  function getEngine() { return voice.lfoEngine; }
-  function getSlot()   { return getEngine()?.slots[activeSlot]; }
-
-  // ── Draw breakpoint curve ──────────────────────────────
-  function drawBpCanvas() {
-    const eng = getEngine(); if (!eng) return;
-    const slot = eng.slots[activeSlot];
-    const dpr = window.devicePixelRatio || 1;
-    const W = bpCanvas.offsetWidth || 280, H = bpCanvas.offsetHeight || 130;
-    bpCanvas.width = W * dpr; bpCanvas.height = H * dpr;
-    const c = bpCanvas.getContext('2d'); c.scale(dpr, dpr);
-    c.fillStyle = '#050510'; c.fillRect(0, 0, W, H);
-    // Grid
-    c.strokeStyle = 'rgba(255,255,255,0.05)'; c.lineWidth = 0.5;
-    [0.25, 0.5, 0.75].forEach(y => { c.beginPath(); c.moveTo(0, y*H); c.lineTo(W, y*H); c.stroke(); });
-    [0.25, 0.5, 0.75].forEach(x => { c.beginPath(); c.moveTo(x*W, 0); c.lineTo(x*W, H); c.stroke(); });
-    // Curve from baked points
-    const pts = slot.points; if (!pts || !pts.length) return;
-    const N = pts.length;
-    c.beginPath();
-    for (let i = 0; i < N; i++) {
-      const x = (i / (N - 1)) * W;
-      const y = (1 - pts[i]) * H;
-      i === 0 ? c.moveTo(x, y) : c.lineTo(x, y);
-    }
-    c.save(); c.globalAlpha = 0.15; c.strokeStyle = color; c.lineWidth = 6; c.stroke(); c.restore();
-    c.strokeStyle = color; c.lineWidth = 2; c.stroke();
-    // Breakpoint handles
-    slot.breakpoints.forEach(bp => {
-      const x = bp.x * W, y = (1 - bp.y) * H;
-      c.beginPath(); c.arc(x, y, 5, 0, Math.PI*2);
-      c.fillStyle = bp.hard ? '#ff6644' : color; c.fill();
-      c.strokeStyle = '#0a0a1a'; c.lineWidth = 1.5; c.stroke();
-    });
-  }
-
-  // ── Breakpoint drag/click interaction ─────────────────
-  let bpDragIdx = -1;
-  const BP_HIT = 10;
-  function bpXY(e) {
-    const r = bpCanvas.getBoundingClientRect();
-    const cx = e.touches ? e.touches[0].clientX : e.clientX;
-    const cy = e.touches ? e.touches[0].clientY : e.clientY;
-    return { x: (cx - r.left) / r.width, y: 1 - (cy - r.top) / r.height };
-  }
-  function bpHit(px, py) {
-    const slot = getSlot(); if (!slot) return -1;
-    const W = bpCanvas.offsetWidth || 280, H = bpCanvas.offsetHeight || 130;
-    for (let i = 0; i < slot.breakpoints.length; i++) {
-      const bp = slot.breakpoints[i];
-      const dx = (bp.x - px) * W, dy = (bp.y - py) * H;
-      if (Math.hypot(dx, dy) < BP_HIT) return i;
-    }
-    return -1;
-  }
-  bpCanvas.addEventListener('pointerdown', e => {
-    e.preventDefault();
-    const { x, y } = bpXY(e);
-    const idx = bpHit(x, y);
-    if (idx >= 0) { bpDragIdx = idx; bpCanvas.setPointerCapture(e.pointerId); return; }
-    // Add new point
-    const slot = getSlot(); if (!slot) return;
-    slot.breakpoints.push({ x: Math.max(0,Math.min(1,x)), y: Math.max(0,Math.min(1,y)), hard: false, tension: 0 });
-    slot.breakpoints.sort((a,b) => a.x - b.x);
-    getEngine().setSlotBreakpoints(activeSlot, slot.breakpoints);
-    drawBpCanvas();
-  });
-  bpCanvas.addEventListener('pointermove', e => {
-    if (bpDragIdx < 0) return;
-    e.preventDefault();
-    const { x, y } = bpXY(e);
-    const slot = getSlot(); if (!slot) return;
-    const bp = slot.breakpoints[bpDragIdx];
-    bp.y = Math.max(0, Math.min(1, y));
-    // Don't move first/last x
-    if (bpDragIdx > 0 && bpDragIdx < slot.breakpoints.length - 1)
-      bp.x = Math.max(0.01, Math.min(0.99, x));
-    getEngine().setSlotBreakpoints(activeSlot, slot.breakpoints);
-    drawBpCanvas();
-  });
-  bpCanvas.addEventListener('pointerup', () => { bpDragIdx = -1; });
-  bpCanvas.addEventListener('dblclick', e => {
-    const { x, y } = bpXY(e);
-    const idx = bpHit(x, y);
-    const slot = getSlot(); if (!slot) return;
-    if (idx > 0 && idx < slot.breakpoints.length - 1) {
-      slot.breakpoints.splice(idx, 1);
-      getEngine().setSlotBreakpoints(activeSlot, slot.breakpoints);
-      drawBpCanvas();
-    } else if (idx >= 0) {
-      slot.breakpoints[idx].hard = !slot.breakpoints[idx].hard;
-      getEngine().setSlotBreakpoints(activeSlot, slot.breakpoints);
-      drawBpCanvas();
-    }
-  });
-
-  // ── Load preset helper ─────────────────────────────────
-  function applyPreset(name) {
-    const eng = getEngine(); if (!eng) return;
-    if (loadLFOPreset(activeSlot, name, eng)) {
-      eng.slots[activeSlot].presetName = name;
-      drawBpCanvas();
-      refreshSlotUI();
-    }
-  }
-
-  // ── Preset button rows ─────────────────────────────────
-  function makePresetRow(label, labelColor, presets) {
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;gap:3px;flex-wrap:wrap;align-items:center;margin-bottom:4px';
-    const lbl = document.createElement('span');
-    lbl.style.cssText = `font-size:11px;color:${labelColor};letter-spacing:1px;min-width:44px;flex-shrink:0`;
-    lbl.textContent = label;
-    row.appendChild(lbl);
-    presets.forEach(([name, display]) => {
-      const b = document.createElement('button');
-      b.className = 'wave-btn'; b.textContent = display;
-      b.style.cssText = `border-color:${labelColor};color:${labelColor};padding:3px 7px;font-size:11px`;
-      b.addEventListener('click', () => applyPreset(name));
-      row.appendChild(b);
-    });
-    return row;
-  }
-
-  const presetSection = document.createElement('div');
-  presetSection.append(
-    makePresetRow('SHAPE', '#aaa', [['sawup','SAW↗'],['sawdn','SAW↘'],['sine','SINE'],['square','SQ'],['triangle','TRI'],['bounce','BOUNCE'],['shark','SHARK'],['expup','EXP↑'],['expdown','EXP↓']]),
-    makePresetRow('STEPS', '#666', [['step4','4-STEP'],['step8','8-STEP'],['stair4','4↑'],['stair4dn','4↓'],['stairirr','IRR']]),
-    makePresetRow('DnB',   '#00ffb2', [['dnbsaw','SAW'],['dnbpump','PUMP'],['wubwub','WUBWUB'],['acid','ACID'],['fastsaw','FAST'],['triplet','TRIPLET'],['rubber','RUBBER']]),
-    makePresetRow('NEURO', '#a855f7', [['neurozap','ZAP'],['neuroglitch','GLITCH'],['neuro','NEURO'],['neurostep','STEP']]),
-    makePresetRow('LIQ',   '#22d3ee', [['liquid','LIQUID'],['breathe','BREATHE'],['flow','FLOW'],['halftime','HALF'],['swell','SWELL'],['vowel','VOWEL'],['wah','WAH']])
-  );
-
-  // ── Target buttons ─────────────────────────────────────
-  const TARGETS = [['none','OFF'],['cutoff','CUTOFF'],['pitch','PITCH'],['amp','TREMOLO'],['resonance','RESO'],['drive','DRIVE'],['noiseAmt','NOISE']];
-  const tgtRow = document.createElement('div'); tgtRow.style.cssText = 'display:flex;gap:3px;flex-wrap:wrap;margin-bottom:6px;align-items:center';
-  const tgtLbl = document.createElement('span'); tgtLbl.style.cssText = 'font-size:11px;color:#666;letter-spacing:1px;min-width:44px;flex-shrink:0'; tgtLbl.textContent = 'TARGET';
-  tgtRow.appendChild(tgtLbl);
-  const tgtBtns = [];
-  TARGETS.forEach(([val, lbl]) => {
-    const b = document.createElement('button'); b.className = 'wave-btn'; b.textContent = lbl; b.dataset.tgt = val;
-    b.style.cssText = 'padding:3px 8px;font-size:11px';
-    b.addEventListener('click', () => {
-      const slot = getSlot(); if (!slot) return;
-      const prev = slot.target;
-      slot.target = val;
-      tgtBtns.forEach(x => x.classList.remove('active'));
-      b.classList.add('active');
-      // Restore modulated params when disabling a target
-      if (val === 'none') {
-        const t = voice.ctx.currentTime;
-        if (prev === 'cutoff')    voice.filter.frequency.setTargetAtTime(Math.max(20, voice.p.filter.cutoff), t, 0.02);
-        if (prev === 'resonance') voice.filter.Q.setTargetAtTime(voice.p.filter.resonance, t, 0.02);
-        if (prev === 'pitch' || prev === 'amp' || prev === 'tremolo') {
-          voice._tremoloGain?.gain.setTargetAtTime(1, t, 0.02);
-          (voice._activeOscs || []).forEach(o => { try { o.detune.setTargetAtTime(0, t, 0.02); } catch(_) {} });
-        }
-        if (prev === 'drive') voice._distPre?.gain.setTargetAtTime(1, t, 0.02);
-        if (prev === 'noiseAmt') voice._noiseG?.gain.setTargetAtTime(voice.p.noise.volume, t, 0.02);
-      }
-    });
-    tgtBtns.push(b); tgtRow.appendChild(b);
-  });
-
-  // ── BARS row ───────────────────────────────────────────
-  const barsRow = document.createElement('div'); barsRow.style.cssText = 'display:flex;gap:3px;align-items:center;margin-bottom:4px';
-  const barsLbl = document.createElement('span'); barsLbl.style.cssText = 'font-size:11px;color:#666;letter-spacing:1px;min-width:44px;flex-shrink:0'; barsLbl.textContent = 'BARS';
-  barsRow.appendChild(barsLbl);
-  const barsBtns = [];
-  [1,2,4,8,16].forEach(n => {
-    const b = document.createElement('button'); b.className = 'wave-btn'; b.textContent = n; b.dataset.bars = n;
-    b.style.cssText = 'padding:3px 10px;font-size:12px';
-    b.addEventListener('click', () => { const s=getSlot();if(s){s.bars=n;barsBtns.forEach(x=>x.classList.remove('active'));b.classList.add('active');} });
-    barsBtns.push(b); barsRow.appendChild(b);
-  });
-
-  // ── ×REPEAT rows (Straight / Triplet / Dotted) ────────
-  const multWrap = document.createElement('div'); multWrap.style.cssText = 'margin-bottom:6px';
-  const MULT_ROWS = [
-    { label:'ST',  color:'#aaa',    values:[[1,'×1'],[2,'×2'],[4,'×4'],[8,'×8'],[16,'×16'],[32,'×32']] },
-    { label:'3T',  color:'#a855f7', values:[[1.5,'×1T'],[3,'×2T'],[6,'×4T'],[12,'×8T'],[24,'×16T']] },
-    { label:'DOT', color:'#22d3ee', values:[[0.667,'×1D'],[1.333,'×2D'],[2.667,'×4D'],[5.333,'×8D']] },
-  ];
-  const allMultBtns = [];
-  MULT_ROWS.forEach(({ label, color: lc, values }) => {
-    const row = document.createElement('div'); row.style.cssText = 'display:flex;gap:2px;align-items:center;margin-bottom:3px';
-    const lbl = document.createElement('span'); lbl.style.cssText = `font-size:11px;color:${lc};min-width:44px;flex-shrink:0`; lbl.textContent = label;
-    row.appendChild(lbl);
-    values.forEach(([val, disp]) => {
-      const b = document.createElement('button'); b.className = 'wave-btn'; b.textContent = disp;
-      b.style.cssText = `border-color:${lc};color:${lc};padding:3px 7px;font-size:11px`;
-      b.dataset.mult = val;
-      b.addEventListener('click', () => { const s=getSlot();if(s){s.mult=val;allMultBtns.forEach(x=>x.classList.remove('active'));b.classList.add('active');} });
-      allMultBtns.push(b); row.appendChild(b);
-    });
-    multWrap.appendChild(row);
-  });
-
-  // ── Depth knob + CLR button ────────────────────────────
-  const bottomRow = document.createElement('div'); bottomRow.style.cssText = 'display:flex;gap:8px;align-items:flex-end;margin-bottom:4px';
-  const depthWrap = document.createElement('div'); depthWrap.className = 'lfo-knob-wrap';
-  const depthKnob = makeKnob({ parent: depthWrap, min: 0, max: 1, value: getEngine()?.slots[0]?.depth ?? 0.6, label: 'DEPTH', decimals: 2, color,
-    onChange: v => { const s = getSlot(); if (s) s.depth = v; }
-  });
-  bottomRow.appendChild(depthWrap);
-
-  const clrBtn = document.createElement('button'); clrBtn.className = 'wave-btn'; clrBtn.textContent = 'CLR';
-  clrBtn.style.cssText = 'border-color:#ff4466;color:#ff4466;padding:4px 10px;font-size:12px;align-self:center';
-  clrBtn.addEventListener('click', () => {
-    const slot = getSlot(); if (!slot) return;
-    slot.breakpoints = [{ x:0, y:0.5, hard:false }, { x:1, y:0.5, hard:false }];
-    getEngine().setSlotBreakpoints(activeSlot, slot.breakpoints);
-    drawBpCanvas();
-  });
-  bottomRow.appendChild(clrBtn);
-
-  // ── Slot tabs (LFO 1–5) ────────────────────────────────
-  function refreshSlotUI() {
-    const eng = getEngine(); if (!eng) return;
-    const slot = eng.slots[activeSlot];
-    // Target
-    tgtBtns.forEach(b => b.classList.toggle('active', b.dataset.tgt === slot.target));
-    // Bars
-    barsBtns.forEach(b => b.classList.toggle('active', parseInt(b.dataset.bars) === slot.bars));
-    // Mult
-    allMultBtns.forEach(b => b.classList.toggle('active', parseFloat(b.dataset.mult) === slot.mult));
-    // Depth
-    depthKnob.setValue(slot.depth);
-    drawBpCanvas();
-  }
-
-  for (let i = 0; i < 5; i++) {
-    const b = document.createElement('button');
-    b.className = 'wave-btn' + (i === 0 ? ' active' : '');
-    b.textContent = `LFO ${i + 1}`;
-    b.style.cssText = 'padding:4px 10px;font-size:12px';
-    b.addEventListener('click', () => {
-      activeSlot = i;
-      slotTabs.forEach(x => x.classList.remove('active')); b.classList.add('active');
-      refreshSlotUI();
-    });
-    slotTabs.push(b); slotTabRow.appendChild(b);
-  }
-
-  // ── Master ON/OFF toggle for LFO Engine ──────────────
-  let lfoEngineEnabled = true;
-  addSectionToggle(lS,
-    () => { // Disable — stop engine + restore all targets
-      lfoEngineEnabled = false;
-      voice.lfoEngine?.stop();
-      const t = voice.ctx.currentTime;
-      voice.filter.frequency.setTargetAtTime(Math.max(20, voice.p.filter.cutoff), t, 0.02);
-      voice.filter.Q.setTargetAtTime(voice.p.filter.resonance, t, 0.02);
-      voice._tremoloGain?.gain.setTargetAtTime(1, t, 0.02);
-      (voice._activeOscs || []).forEach(o => { try { o.detune.setTargetAtTime(0, t, 0.02); } catch(_) {} });
-      voice._distPre?.gain.setTargetAtTime(1, t, 0.02);
-      voice._noiseG?.gain.setTargetAtTime(voice.p.noise.volume, t, 0.02);
-    },
-    () => { // Enable — restart engine
-      lfoEngineEnabled = true;
-      if (voice.lfoEngine && !voice.lfoEngine.playing) voice.lfoEngine.start();
-    },
-    true
-  );
-
-  // ── Assemble ───────────────────────────────────────────
-  lS.append(slotTabRow, canvasWrap, tgtRow, barsRow, multWrap, presetSection, bottomRow);
-
-  // Initial draw
-  setTimeout(() => { refreshSlotUI(); drawBpCanvas(); }, 50);
+  // LFO ENGINE is built externally via buildAllLFOEngines() in main.js
 
   // Sequencer section — header with inline play button top-right
   const seqS = document.createElement('div');
@@ -1067,9 +675,6 @@ function buildVoicePanel(col, voice, color, bpmGet, oscMode, centerCol) {
       { label:'LFO 4', color:'#06b6d4', getValue: () => {
           const s = voice.lfoEngine?.slots?.[3]; if (!s || !s.enabled || s.target==='none') return null;
           const ph = Math.round(s.phase * (s.points?.length||512)); return s.points?.[ph % (s.points.length||512)] ?? null; } },
-      { label:'TWE',   color:'#f59e0b', getValue: () => {
-          if (p.twe._bypassed) return null;
-          const g = voice.tweMain?.gain?.gain?.value; return g != null ? g / (Math.max(0.01, p.twe.main?.depth||1)) : null; } },
       { label:'ENV',   color:'#22c55e', getValue: () => {
           if (!voice._playing) return null;
           const env = voice._envTracker?.current ?? null; return env; } },
@@ -1117,7 +722,6 @@ function buildVoicePanel(col, voice, color, bpmGet, oscMode, centerCol) {
         // target label
         let tgtLabel = '';
         if (li < 5 && voice.lfoEngine?.slots?.[li]) tgtLabel = voice.lfoEngine.slots[li].target || '';
-        else if (lane.label==='TWE') tgtLabel = p.twe.main?.target || '';
         else if (lane.label==='ENV') tgtLabel = 'cutoff';
         if (tgtLabel && tgtLabel !== 'none') {
           c.fillStyle = active ? `${lane.color}99` : '#222';
@@ -1175,6 +779,87 @@ function buildVoicePanel(col, voice, color, bpmGet, oscMode, centerCol) {
   // ── FX (Reverb + Delay) ───────────────────────────────────
   const fxS = cSec('FX');
   buildFXSection(fxS, p.fx, voice, color);
+}
+
+// ─────────────────────────────────────────────────────────
+//  buildAllLFOEngines — one LFO ENGINE section with 3 voice
+//  columns side-by-side, built once into the center panel.
+//  voices      : array of WobblerVoice
+//  voiceColors : array of accent color strings
+//  centerPanel : DOM container
+// ─────────────────────────────────────────────────────────
+function buildAllLFOEngines(voices, voiceColors, centerPanel) {
+  // Wrapper section
+  const sec = document.createElement('div');
+  sec.className = 'v-sec lfo-sec';
+  sec.id = 'lfo-engine-section';
+
+  const hdr = document.createElement('div');
+  hdr.className = 'sec-hdr';
+  hdr.textContent = 'LFO ENGINE';
+  sec.appendChild(hdr);
+
+  // 3-column row — one per voice
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:6px;align-items:flex-start';
+  sec.appendChild(row);
+
+  voices.forEach((voice, i) => {
+    const color = voiceColors[i] || '#00ffb2';
+
+    // Voice sub-header column wrapper
+    const voiceWrap = document.createElement('div');
+    voiceWrap.style.cssText = 'flex:1;min-width:0;display:flex;flex-direction:column;gap:4px';
+    row.appendChild(voiceWrap);
+
+    // Voice label + ON/OFF
+    const voiceHdr = document.createElement('div');
+    voiceHdr.style.cssText = `display:flex;align-items:center;justify-content:space-between;padding:2px 4px;background:${color}18;border-radius:3px;border:1px solid ${color}33`;
+    const voiceLbl = document.createElement('span');
+    voiceLbl.style.cssText = `font-size:9px;letter-spacing:1px;color:${color};font-family:monospace`;
+    voiceLbl.textContent = `VOICE ${i + 1}`;
+    voiceHdr.appendChild(voiceLbl);
+
+    // Per-voice engine ON/OFF toggle
+    const onOffBtn = document.createElement('button');
+    onOffBtn.textContent = 'ON';
+    onOffBtn.style.cssText = `padding:1px 6px;font-size:8px;font-family:monospace;border:1px solid ${color}66;color:${color};background:${color}22;border-radius:2px;cursor:pointer`;
+    onOffBtn.addEventListener('click', () => {
+      const active = onOffBtn.textContent === 'ON';
+      if (active) {
+        onOffBtn.textContent = 'OFF';
+        onOffBtn.style.borderColor = '#333';
+        onOffBtn.style.color = '#444';
+        onOffBtn.style.background = 'transparent';
+        voice.lfoEngine?.stop();
+        const t = voice.ctx.currentTime;
+        voice._filterSetCutoff(voice.p.filter.cutoff, t, 0.02);
+        voice._filterSetResonance(voice.p.filter.resonance, t, 0.02);
+        voice._tremoloGain?.gain.setTargetAtTime(1, t, 0.02);
+        (voice._activeOscs || []).forEach(o => { try { o.detune.setTargetAtTime(0, t, 0.02); } catch(_) {} });
+        voice._distPre?.gain.setTargetAtTime(1, t, 0.02);
+        voice._noiseG?.gain.setTargetAtTime(voice.p.noise.volume, t, 0.02);
+      } else {
+        onOffBtn.textContent = 'ON';
+        onOffBtn.style.borderColor = `${color}66`;
+        onOffBtn.style.color = color;
+        onOffBtn.style.background = `${color}22`;
+        if (voice.lfoEngine && !voice.lfoEngine.playing) voice.lfoEngine.start();
+      }
+    });
+    voiceHdr.appendChild(onOffBtn);
+    voiceWrap.appendChild(voiceHdr);
+
+    // Two LFO slot columns inside each voice column
+    const innerRow = document.createElement('div');
+    innerRow.style.cssText = 'display:flex;gap:4px;align-items:flex-start';
+    voiceWrap.appendChild(innerRow);
+
+    buildOneLFOColumn(innerRow, 0, voice.lfoEngine, color, voice);
+    buildOneLFOColumn(innerRow, 1, voice.lfoEngine, color, voice);
+  });
+
+  centerPanel.appendChild(sec);
 }
 
 // ─────────────────────────────────────────────────────────

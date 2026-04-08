@@ -31,14 +31,17 @@ function bpBake(breakpoints) {
 }
 
 // ─── LFOEngine ────────────────────────────────────────────────
-// One instance per WobblerVoice.
+// One instance per WobblerVoice, OR one global instance for WobblerSynth.
+// Pass a single voice or an array of voices to the constructor.
 // Manages 5 parallel LFO slots with breakpoint curves.
 class LFOEngine {
   constructor(voice) {
+    // voice can be a single WobblerVoice or an array of voices (global mode)
     this.voice   = voice;
+    this.voices  = Array.isArray(voice) ? voice : null; // null = single-voice mode
     this.timer   = null;
     this.playing = false;
-    this.bpm     = 120;
+    this.bpm     = 174;
 
     // 5 LFO Slots
     this.slots = Array.from({ length: 5 }, (_, i) => ({
@@ -46,9 +49,8 @@ class LFOEngine {
       breakpoints: [{ x:0, y:0.5, hard:false }, { x:1, y:0.5, hard:false }],
       bars:    2,
       mult:    1.333,   // ×2D default
-      target:  'none',
-      depth:   0,
-      offset:  0,       // phase-offset (0..1) for call & response
+      mappings: [],      // [{target, depth, modMin, modMax}, ...]
+      offset:  0,        // phase-offset (0..1) for call & response
       mode:    'normal', // normal | inverse | divide2 | divide3
       phase:   0,
       enabled: false,
@@ -83,17 +85,25 @@ class LFOEngine {
 
   _tick() {
     if (!this.playing) return;
-    const v = this.voice;
-    const ctx = v.ctx;
+    // In global mode, use first enabled voice for ctx/time; skip if none playing
+    const voices = this.voices
+      ? this.voices.filter(v => v._enabled)
+      : [this.voice];
+    if (!voices.length) return;
+    const ctx = voices[0].ctx;
     if (!ctx) return;
     const t = ctx.currentTime;
     const barDur = 4 * 60 / this.bpm;
 
     this.slots.forEach(slot => {
-      if (!slot.enabled || slot.target === 'none' || slot.depth < 0.01) return;
+      const activeMappings = (slot.mappings || []).filter(m => m.target && m.target !== 'none');
+      if (!slot.enabled || !activeMappings.length) return;
 
       const cycleDur = slot.bars * barDur;
-      const advance  = 0.016 / cycleDur;
+      if (!cycleDur || cycleDur < 0.001) return; // guard against zero/NaN
+
+      const advance = 0.016 / cycleDur;
+      if (!isFinite(advance)) return;
 
       // Phase mode
       let phase = slot.phase;
@@ -102,29 +112,35 @@ class LFOEngine {
       slot.phase = (slot.phase + advance) % 1;
 
       const scaledPos = (phase * slot.mult) % 1;
-      const idx = Math.min(LFO_POINTS - 1, Math.floor(scaledPos * LFO_POINTS));
-      const val = slot.points[idx]; // 0..1
+      const idx = Math.min(LFO_POINTS - 1, Math.max(0, Math.floor(scaledPos * LFO_POINTS)));
+      const val = slot.points[idx];
+      if (val === undefined || !isFinite(val)) return; // guard NaN/undefined
 
-      this._applyValue(slot.target, val, slot.depth, t);
+      // Apply each mapping to all target voices
+      activeMappings.forEach(m => {
+        voices.forEach(v => this._applyValue(m.target, val, m.depth ?? 0.6, t, v, m.modMin ?? 0, m.modMax ?? 1));
+      });
     });
   }
 
-  _applyValue(target, val, depth, t) {
-    const v = this.voice;
+  _applyValue(target, val, depth, t, v, modMin = 0, modMax = 1) {
+    if (!v) v = this.voice; // fallback for single-voice mode
+    if (!isFinite(val) || !isFinite(depth)) return;
+    // modMin/modMax define the absolute sweep range (normalized 0..1 on the param)
+    // val (0..1 from curve) is remapped into [modMin, modMax]
+    const ranged = modMin + val * (modMax - modMin);
 
     switch (target) {
       case 'cutoff': {
-        const cutoff = v.p.filter.cutoff;
-        // Log-scale sweep (matches Voice Module implementation)
-        const lo = Math.max(20, cutoff * (1 - depth * 0.9));
-        const hi = cutoff + depth * (18000 - cutoff);
-        const hz = lo * Math.pow(Math.max(1, hi / lo), val);
-        v.filter.frequency.setTargetAtTime(Math.max(20, hz), t, 0.006);
+        // ranged maps directly to 20..20000 Hz on log scale
+        const hz = Math.max(20, Math.min(20000, 20 * Math.pow(1000, ranged)));
+        v._filterLFOSetCutoff(hz);
         break;
       }
       case 'resonance': {
-        const q = v.p.filter.resonance * (1 + val * depth * 3);
-        v.filter.Q.setTargetAtTime(Math.max(0.1, q), t, 0.01);
+        // ranged maps to 0.01..30 Q
+        const q = Math.max(0.01, Math.min(30, 0.01 + ranged * 29.99));
+        v._filterLFOSetResonance(q);
         break;
       }
       case 'pitch': {
@@ -136,22 +152,47 @@ class LFOEngine {
         }
         break;
       }
+      case 'semi': {
+        // val 0..1 → bipolar semitone offset ±depth semitones (in cents)
+        const semiCents = Math.round((val - 0.5) * 2 * depth * 12) * 100;
+        if (v._activeOscs) {
+          v._activeOscs.forEach(o => {
+            try { o.detune.setValueAtTime(semiCents, t); } catch (e) {}
+          });
+        }
+        break;
+      }
+      case 'fine': {
+        // val 0..1 → bipolar fine tune ±depth*100 cents
+        const fineCents = (val - 0.5) * 2 * depth * 100;
+        if (v._activeOscs) {
+          v._activeOscs.forEach(o => {
+            try { o.detune.setTargetAtTime(fineCents, t, 0.008); } catch (e) {}
+          });
+        }
+        break;
+      }
       case 'amp':
       case 'tremolo': {
-        const trem = 1 - depth * (1 - val) * 0.8;
+        // ranged → gain 0..1 (modMin=full silence, modMax=full volume)
         if (v._tremoloGain)
-          v._tremoloGain.gain.setTargetAtTime(Math.max(0, trem), t, 0.01);
+          v._tremoloGain.gain.setTargetAtTime(Math.max(0, Math.min(1, ranged)), t, 0.01);
         break;
       }
       case 'drive': {
-        const drv = Math.max(1, (v.p.dist.drive || 0.3) * (0.3 + val * 1.4));
-        if (v._distPre)
-          v._distPre.gain.setTargetAtTime(drv, t, 0.008);
+        // ranged maps to 0..1 drive
+        v.set('dist', 'drive', Math.max(0, Math.min(1, ranged)));
+        break;
+      }
+      case 'distMix': {
+        // ranged maps to 0..1 mix
+        v.set('dist', 'mix', Math.max(0, Math.min(1, ranged)));
         break;
       }
       case 'noiseAmt': {
-        if (v._noiseG)
-          v._noiseG.gain.setTargetAtTime(val * depth, t, 0.01);
+        if (v._noiseLvlGain && v._playing) {
+          v._noiseLvlGain.gain.setTargetAtTime(Math.max(0, Math.min(1, ranged)), t, 0.01);
+        }
         break;
       }
     }
@@ -162,8 +203,7 @@ class LFOEngine {
     return this.slots.map(s => ({
       bars:        s.bars,
       mult:        s.mult,
-      target:      s.target,
-      depth:       s.depth,
+      mappings:    s.mappings || [],
       offset:      s.offset,
       mode:        s.mode,
       enabled:     s.enabled,
@@ -180,12 +220,33 @@ class LFOEngine {
       const s = this.slots[i];
       s.bars       = conf.bars   || 2;
       s.mult       = conf.mult   || 1;
-      s.target     = conf.target || 'none';
-      s.depth      = conf.depth  ?? 0;
       s.offset     = conf.offset || 0;
       s.mode       = conf.mode   || 'normal';
-      s.enabled    = conf.enabled !== false && s.target !== 'none';
+      s.enabled    = conf.enabled !== false;
       s.presetName = conf.presetName || 'custom';
+
+      // Migration: old format used single target/depth/modMin/modMax
+      // New format uses mappings array
+      if (conf.mappings && conf.mappings.length > 0) {
+        // New format: use mappings array directly
+        s.mappings = conf.mappings.map(m => ({
+          target: m.target || 'none',
+          depth: m.depth ?? 0.6,
+          modMin: m.modMin ?? 0,
+          modMax: m.modMax ?? 1
+        }));
+      } else if (conf.target && conf.target !== 'none') {
+        // Old format: migrate single target to mappings array
+        s.mappings = [{
+          target: conf.target,
+          depth: conf.depth ?? 0.6,
+          modMin: conf.modMin ?? 0,
+          modMax: conf.modMax ?? 1
+        }];
+      } else {
+        s.mappings = [];
+      }
+
       // Load breakpoints: prefer named preset, fall back to stored points
       if (conf.presetName && conf.presetName !== 'custom' && conf.presetName !== 'none'
           && typeof LFO_PRESET_LIBRARY !== 'undefined'

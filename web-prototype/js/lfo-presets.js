@@ -98,6 +98,36 @@ const LFO_PRESET_LIBRARY = {
   gate50:     [mk(0,1,true), mk(.5,1,true), mk(.5,0,true), mk(1,0,true)],
   gate25:     [mk(0,1,true), mk(.25,1,true), mk(.25,0,true), mk(1,0,true)],
 
+  // ── AGGRESSIVE ────────────────────────────────────────────
+  hardsaw:    [mk(0,0,true), mk(.49,1,true), mk(.5,0,true), mk(.99,1,true), mk(1,0,true)],
+  spike:      [mk(0,0,true), mk(.01,1,true), mk(.02,0,true), mk(.5,0,true), mk(.51,1,true), mk(.52,0,true), mk(1,0,true)],
+  crusher:    [mk(0,1,true), mk(.12,0,true), mk(.13,1,true), mk(.25,0,true), mk(.26,.8,true), mk(.37,0,true), mk(.38,.6,true), mk(.5,0,true), mk(.51,1,true), mk(.63,0,true), mk(.64,.7,true), mk(.75,0,true), mk(.76,.5,true), mk(.87,0,true), mk(1,0,true)],
+  razorsaw:   [mk(0,0,false,-1), mk(.24,1,false,-1), mk(.25,0,true), mk(.49,1,false,-1), mk(.5,0,true), mk(.74,1,false,-1), mk(.75,0,true), mk(.99,1,false,-1), mk(1,0,true)],
+  glitchstep: [mk(0,1,true), mk(.06,0,true), mk(.07,.8,true), mk(.13,0,true), mk(.14,.6,true), mk(.25,0,true), mk(.26,1,true), mk(.31,0,true), mk(.32,.9,true), mk(.5,0,true), mk(.51,1,true), mk(.56,.3,true), mk(.57,.8,true), mk(.63,0,true), mk(.75,.5,true), mk(.81,0,true), mk(.82,.7,true), mk(1,0,true)],
+  sawblast:   [mk(0,0,true), mk(.01,1,false,1), mk(.12,.7,false,1), mk(.13,0,true), mk(.14,1,false,1), mk(.25,.6,false,1), mk(.26,0,true), mk(.27,1,false,1), mk(.38,.5,false,1), mk(.39,0,true), mk(.5,1,false,1), mk(.62,.4,false,1), mk(.63,0,true), mk(.75,1,false,1), mk(.87,.3,false,1), mk(1,0)],
+
+  // ── 4-BAR BUILDS / RISERS ────────────────────────────────
+  rise4:      [mk(0,0,false,-1), mk(1,1,false,-1)],
+  riseexp4:   [mk(0,0,false,-1), mk(.5,.05,false,-1), mk(.75,.2,false,-1), mk(.9,.6,false,-1), mk(1,1,false,-1)],
+  risesaw4:   [mk(0,0,true), mk(.24,.95,false,-1), mk(.25,0,true), mk(.49,.95,false,-1), mk(.5,0,true), mk(.74,.95,false,-1), mk(.75,0,true), mk(1,1,false,-1)],
+  buildpump:  [mk(0,0,true), mk(.01,.6,false,1), mk(.12,.1,false,1), mk(.25,0,true), mk(.26,.7,false,1), mk(.37,.15,false,1), mk(.5,0,true), mk(.51,.8,false,1), mk(.62,.2,false,1), mk(.75,0,true), mk(.76,1,false,1), mk(.87,.3,false,1), mk(1,0,true)],
+  risedrop:   [mk(0,0,false,-1), mk(.75,1,false,-1), mk(.75,1,true), mk(.76,0,true), mk(1,0)],
+  stab4:      [mk(0,1,true), mk(.01,0,false,1), mk(.25,0,true), mk(.26,1,true), mk(.27,0,false,1), mk(.5,0,true), mk(.51,1,true), mk(.52,0,false,1), mk(.75,0,true), mk(.76,1,true), mk(.77,0,false,1), mk(1,0,true)],
+  swell4:     [mk(0,0,false,-1), mk(.25,.05,false,-1), mk(.5,.15,false,-1), mk(.75,.4,false,-1), mk(.9,.85,false,1), mk(1,1,false,1)],
+  tensionbld: [mk(0,0,false,-1), mk(.3,.02,false,-1), mk(.6,.15,false,-1), mk(.8,.5,false,-1), mk(.95,.9,false,-1), mk(1,1,true)],
+
+  // ── DnB CALL & RESPONSE SYSTEM ──────────────────────────
+  // CALL: instant snap to 85%, exponential fall over 3.5 bars, reset
+  dnb_call:      [mk(0,0,true), mk(.02,.85,false,1), mk(.875,.02,false,1), mk(1,0,true)],
+  // RESPONSE: ease-in build, late peak at ~65%, soft fall — answers the call
+  dnb_response:  [mk(0,.05,false,-1), mk(.2,.08,false,-1), mk(.45,.12,false,-1),
+                  mk(.65,.92,false,1), mk(.8,.7,false,1), mk(.95,.25,false,1), mk(1,.05)],
+  // COUNTER-DRIVE: inverse of call — drive rises as cutoff falls (dirt in the sustain)
+  counter_drive: [mk(0,1,true), mk(.02,.15,false,-1), mk(.875,.98,false,-1), mk(1,1,true)],
+  // RESO-OVERTONES: flat until bar 3, builds to peak just before bar 4 end, snaps to 0
+  reso_overtones:[mk(0,0,true), mk(.5,0,true), mk(.75,.02,false,-1),
+                  mk(.93,1,false,1), mk(.97,.85,false,1), mk(1,0,true)],
+
   // ── MISC / FX ───────────────────────────────────────────
   bounce:     [mk(0,1,false,1), mk(.15,0,false,-1), mk(.35,.55,false,1),
                mk(.5,0,false,-1), mk(.65,.28,false,1), mk(.78,0,false,-1), mk(1,0)],

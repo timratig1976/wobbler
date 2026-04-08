@@ -36,17 +36,22 @@ class ZDFFilterProcessor extends AudioWorkletProcessor {
   // ── Single 2nd-order ZDF SVF tick ──────────────────────────
   // Returns [lp, bp, hp]  (lowpass / bandpass / highpass outputs)
   _svfTick(input, stage, g, k) {
-    const [ic1, ic2] = stage;
+    let ic1 = stage[0], ic2 = stage[1];
+    // Reset NaN state — can happen at extreme resonance
+    if (!isFinite(ic1) || !isFinite(ic2)) { ic1 = 0; ic2 = 0; stage[0] = 0; stage[1] = 0; }
     // ZDF solve (Mystran's formulation — one-sample exact)
-    const v1 = (input - ic2 - k * ic1) / (1 + g * (g + k));
+    const denom = 1 + g * (g + k);
+    const v1 = (input - ic2 - k * ic1) / denom;
     const v2 = ic1 + g * v1;
     const v3 = ic2 + g * v2;
     const lp = v3;
     const bp = v2;
     const hp = input - lp - k * bp;
-    // Update integrator states
-    stage[0] = 2 * v2 - ic1;
-    stage[1] = 2 * v3 - ic2;
+    // Update integrator states — clamp to prevent Infinity accumulation
+    const s0 = 2 * v2 - ic1;
+    const s1 = 2 * v3 - ic2;
+    stage[0] = isFinite(s0) ? Math.max(-10, Math.min(10, s0)) : 0;
+    stage[1] = isFinite(s1) ? Math.max(-10, Math.min(10, s1)) : 0;
     return [lp, bp, hp];
   }
 
@@ -84,31 +89,32 @@ class ZDFFilterProcessor extends AudioWorkletProcessor {
         const q  = resonanceParam.length > 1 ? resonanceParam[i] : resonanceParam[0];
 
         // ZDF coefficient:  g = tan(π·fc/sr)
-        const g = Math.tan(Math.PI * Math.min(fc, sr * 0.499) / sr);
-        // Resonance → k: k = 1/Q.  At k=0 → self-oscillation.
-        // We scale: Q knob 0.01–40 maps to k = 2–0.025 (lower k = more resonance)
-        const k = Math.max(0.001, 2 / Math.max(0.01, q));
+        // Clamp to sr*0.4 (≈17.6kHz at 44.1kHz) — above this tan() diverges causing aliasing artifacts
+        const g = Math.tan(Math.PI * Math.max(20, Math.min(fc, sr * 0.4)) / sr);
+        // Resonance → k: k = 2/Q.  Floor at 0.25 (Q=8) — unconditionally stable, no self-oscillation.
+        const k = Math.max(0.25, 2 / Math.max(0.01, q));
 
+        // Clamp input — prevent upstream overflow from destabilising SVF states
+        const rawIn = inp[i];
+        const safeIn = isFinite(rawIn) ? Math.max(-1.5, Math.min(1.5, rawIn)) : 0;
         // Pre-drive soft clip
-        let x = this._clip(inp[i], drive);
+        let x = this._clip(safeIn, drive);
 
-        // 4-pole cascade: run 2 SVF stages
-        // Stage 1
-        const [lp1, bp1, hp1] = this._svfTick(x,  stages[0], g, k);
-        // Stage 2 — feed LP output of stage 1 into stage 2
-        const [lp2, bp2, hp2] = this._svfTick(lp1, stages[1], g, k);
+        // Single 2-pole SVF — stable at all Q values
+        const [lp1, bp1, hp1] = this._svfTick(x, stages[0], g, k);
 
         // Pick output by filterType
+        // SVF LP/HP passband gain = 1. BP peak gain = 1/k, normalize by k.
         let y;
         switch (filterType) {
-          case 1:  y = hp2; break;       // Highpass
-          case 2:  y = bp2; break;       // Bandpass
-          case 3:  y = lp2 + hp2; break; // Notch
-          default: y = lp2; break;       // Lowpass
+          case 1:  y = hp1; break;       // Highpass
+          case 2:  y = bp1 * k; break;   // Bandpass — normalized to unity peak gain
+          case 3:  y = lp1 + hp1; break; // Notch
+          default: y = lp1; break;       // Lowpass
         }
 
-        // Post-clip to prevent blowup at extreme self-oscillation
-        out[i] = Math.max(-2, Math.min(2, y));
+        // Clamp — safety net
+        out[i] = isFinite(y) ? Math.max(-1, Math.min(1, y)) : 0;
       }
     }
     return true;

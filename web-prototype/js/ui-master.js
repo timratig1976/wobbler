@@ -152,6 +152,43 @@ function buildMaster(container, synth) {
   makeKnob({parent:fxRow,min:0,max:0.9, value:s.delayFB.gain.value,   label:'DLY-FB',     decimals:2,color:'#888',onChange:v=>s.delayFB.gain.setTargetAtTime(v,s.ctx.currentTime,0.01)});
   makeKnob({parent:fxRow,min:0,max:1,   value:s.delayWet.gain.value,  label:'DLY-MX',     decimals:2,color:'#888',onChange:v=>s.delayWet.gain.setTargetAtTime(v,s.ctx.currentTime,0.01)});
 
+  // Master bus filter — type toggle + cutoff + resonance
+  const mfWrap = document.createElement('div');
+  mfWrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:3px;margin-left:8px;border-left:1px solid #1a1a30;padding-left:8px;';
+  const mfLbl = document.createElement('div');
+  mfLbl.textContent = 'M.FILTER';
+  mfLbl.style.cssText = 'font-size:8px;letter-spacing:1px;color:rgba(255,255,255,0.25);margin-bottom:1px;';
+  mfWrap.appendChild(mfLbl);
+  // Type buttons row
+  const mfTypeRow = document.createElement('div');
+  mfTypeRow.style.cssText = 'display:flex;gap:2px;';
+  const MF_TYPES = ['lowpass','highpass','bandpass','notch'];
+  const MF_LABELS = { lowpass:'LP', highpass:'HP', bandpass:'BP', notch:'NO' };
+  const mfBtns = [];
+  MF_TYPES.forEach(t => {
+    const b = document.createElement('button');
+    b.textContent = MF_LABELS[t];
+    b.title = t;
+    const active = s.masterFilter.type === t;
+    b.style.cssText = `padding:2px 5px;font-size:9px;letter-spacing:0.5px;background:transparent;border:1px solid ${active?'#aaa':'#2a2a44'};color:${active?'#fff':'#555'};border-radius:2px;cursor:pointer;font-family:monospace;`;
+    b.addEventListener('click', () => {
+      mfBtns.forEach(x => { x.style.borderColor='#2a2a44'; x.style.color='#555'; });
+      b.style.borderColor = '#aaa'; b.style.color = '#fff';
+      try { s.masterFilter.type = t; } catch(_) {}
+    });
+    mfBtns.push(b); mfTypeRow.appendChild(b);
+  });
+  mfWrap.appendChild(mfTypeRow);
+  // Knobs row
+  const mfKnobRow = document.createElement('div');
+  mfKnobRow.style.cssText = 'display:flex;gap:2px;';
+  mfWrap.appendChild(mfKnobRow);
+  makeKnob({parent:mfKnobRow,min:20,max:20000,value:s.masterFilter.frequency.value,label:'CUT',decimals:0,log:true,size:40,color:'#aaa',
+    onChange:v=>{ try { s.masterFilter.frequency.setTargetAtTime(Math.max(20,Math.min(20000,v)),s.ctx.currentTime,0.02); } catch(_){} }});
+  makeKnob({parent:mfKnobRow,min:0.01,max:18,value:s.masterFilter.Q.value,label:'RES',decimals:1,size:40,color:'#aaa',
+    onChange:v=>{ try { s.masterFilter.Q.setTargetAtTime(Math.max(0.01,v),s.ctx.currentTime,0.02); } catch(_){} }});
+  fxRow.appendChild(mfWrap);
+
   // POLY / MONO toggle
   const polyWrap = document.createElement('div');
   polyWrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:4px;margin-left:8px;';
@@ -294,6 +331,3 @@ function buildVisualizer(container, analyser) {
   draw(performance.now());
 }
 
-// ─────────────────────────────────────────────────────────
-//  TWE preview canvas
-// ─────────────────────────────────────────────────────────
